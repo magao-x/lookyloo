@@ -37,6 +37,7 @@ def main():
     parser.add_argument('--utc-start', help=f"ISO UTC datetime stamp of earliest observation start time to process (supersedes --semester)", type=parse_iso_datetime)
     parser.add_argument('--utc-end', help=f"ISO UTC datetime stamp of latest observation end time to process (ignored in daemon mode)", type=parse_iso_datetime)
     parser.add_argument('-X', '--data-root', help=f"Search directory for telem and rawimages subdirectories, repeat to specify multiple roots. (default: {LOOKYLOO_DATA_ROOTS.split(':')})", action='append')
+    parser.add_argument('--ignore-data-integrity', help="[DEBUG USE ONLY]", action='store_true')
     args = parser.parse_args()
 
     log_format = '%(filename)s:%(lineno)d: [%(levelname)s] %(message)s'
@@ -57,7 +58,7 @@ def main():
     else:
         data_roots = [pathlib.Path(x) for x in LOOKYLOO_DATA_ROOTS.split(':')]
     start_dt, end_dt = get_search_start_end_timestamps(args.semester, args.utc_start, args.utc_end)
-    new_observation_spans, _ = get_new_observation_spans(data_roots, set(), start_dt, end_dt)
+    new_observation_spans, _ = get_new_observation_spans(data_roots, set(), start_dt, end_dt, ignore_data_integrity=args.ignore_data_integrity)
     new_observation_spans = [(x.begin, x) for x in new_observation_spans]
     new_observation_spans.sort()
     new_observation_spans = [x[1] for x in new_observation_spans]

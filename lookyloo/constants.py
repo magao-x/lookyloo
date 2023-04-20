@@ -12,7 +12,12 @@ DEFAULT_CUBE = object()
 ALL_CAMERAS = {
     'camsci1': DEFAULT_SEPARATE,
     'camsci2': DEFAULT_SEPARATE,
+    'camlowfs': DEFAULT_SEPARATE,
+    'camwfs': DEFAULT_SEPARATE,
+    'camtip': DEFAULT_SEPARATE,
+    'camacq': DEFAULT_SEPARATE,
 }
+AUTO_EXPORT_CAMERAS = ['camsci1', 'camsci2']
 SLEEP_FOR_TELEMS = 5
 CHECK_INTERVAL_SEC = 30
 LINE_BUFFERED = 1

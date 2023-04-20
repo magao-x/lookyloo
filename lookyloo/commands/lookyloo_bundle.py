@@ -41,6 +41,7 @@ def main():
     parser.add_argument('-X', '--data-root', help=f"Search directory for telem and rawimages subdirectories, repeat to specify multiple roots. (default: {LOOKYLOO_DATA_ROOTS.split(':')})", action='append')
     parser.add_argument('-D', '--output-dir', help=f"output directory, defaults to current dir", action='store', default=os.getcwd())
     parser.add_argument('-j', '--parallel-jobs', default=8, help="Max number of parallel xrif2fits processes to launch (default: 8; if the number of archives in an interval is smaller than this, fewer processes will be launched)")
+    parser.add_argument('--ignore-data-integrity', help="[DEBUG USE ONLY]", action='store_true')
     args = parser.parse_args()
     output_path = pathlib.Path(args.output_dir)
     if not output_path.is_dir():
@@ -69,7 +70,7 @@ def main():
         data_roots = [pathlib.Path(x) for x in LOOKYLOO_DATA_ROOTS.split(':')]
     output_dir = pathlib.Path(args.output_dir)
     start_dt, end_dt = get_search_start_end_timestamps(args.semester, args.utc_start, args.utc_end)
-    new_observation_spans, _ = get_new_observation_spans(data_roots, set(), start_dt, end_dt)
+    new_observation_spans, _ = get_new_observation_spans(data_roots, set(), start_dt, end_dt, ignore_data_integrity=args.ignore_data_integrity)
 
     with futures.ThreadPoolExecutor(max_workers=args.parallel_jobs) as threadpool:
         for span in new_observation_spans:

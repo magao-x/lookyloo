@@ -9,7 +9,7 @@ import typing
 from datetime import timezone
 from concurrent import futures
 
-from ..constants import HISTORY_FILENAME, ALL_CAMERAS, LOOKYLOO_DATA_ROOTS, QUICKLOOK_PATH, DEFAULT_CUBE, DEFAULT_SEPARATE, CHECK_INTERVAL_SEC, LOG_PATH
+from ..constants import HISTORY_FILENAME, AUTO_EXPORT_CAMERAS, LOOKYLOO_DATA_ROOTS, QUICKLOOK_PATH, DEFAULT_CUBE, DEFAULT_SEPARATE, CHECK_INTERVAL_SEC, LOG_PATH
 from ..utils import parse_iso_datetime, utcnow
 from ..core import (
     load_file_history, TimestampedFile, ObservationSpan, do_quicklook_for_camera, get_new_observation_spans,
@@ -29,13 +29,14 @@ def daemon_mode(
     ignore_history: bool,
     executor : futures.ThreadPoolExecutor,
     dry_run : bool,
+    ignore_data_integrity: bool,
 ):
     existing_observation_spans = set()
     log.info(f"Started at {datetime.datetime.now().isoformat()}, looking for unprocessed observations since {start_dt}...")
     while True:
         start_time = time.time()
         try:
-            result = get_new_observation_spans(data_roots, existing_observation_spans, start_dt)
+            result = get_new_observation_spans(data_roots, existing_observation_spans, start_dt, ignore_data_integrity=ignore_data_integrity)
             new_observation_spans : typing.List[ObservationSpan] = result[0]
             start_dt : datetime.datetime = result[1]
             spans_with_data = set()
@@ -66,6 +67,7 @@ def main():
     parser.add_argument('-D', '--output-dir', help=f"output directory, defaults to {QUICKLOOK_PATH.as_posix()}", action='store', default=QUICKLOOK_PATH.as_posix())
     parser.add_argument('-L', '--log-dir', help=f"output directory, defaults to {LOG_PATH.as_posix()}", action='store', default=LOG_PATH.as_posix())
     parser.add_argument('-j', '--parallel-jobs', default=8, help="Max number of parallel xrif2fits processes to launch (if the number of archives in an interval is smaller than this, fewer processes will be launched)")
+    parser.add_argument('--ignore-data-integrity', help="[DEBUG USE ONLY]", action='store_true')
     args = parser.parse_args()
     output_path = pathlib.Path(args.output_dir)
     if not output_path.is_dir():
@@ -88,7 +90,7 @@ def main():
         console.setFormatter(formatter)
         log.debug(f"Logging to {log_file_path}")
 
-    cameras = list(ALL_CAMERAS.keys())
+    cameras = AUTO_EXPORT_CAMERAS
     if args.data_root:
         data_roots = [pathlib.Path(x) for x in args.data_root]
     else:

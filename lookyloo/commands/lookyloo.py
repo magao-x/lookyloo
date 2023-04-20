@@ -24,6 +24,14 @@ from ..core import (
 
 log = logging.getLogger('lookyloo')
 
+QUICKLOOK_CAMERAS = [
+    'camsci1',
+    'camsci2',
+    'camlowfs',
+    'camtip',
+    'camacq',
+]
+
 def main():
     now = datetime.datetime.now()
     this_year = now.year
@@ -42,9 +50,10 @@ def main():
     parser.add_argument('--utc-start', help=f"ISO UTC datetime stamp of earliest observation start time to process (supersedes --semester)", type=parse_iso_datetime)
     parser.add_argument('--utc-end', help=f"ISO UTC datetime stamp of latest observation end time to process (ignored in daemon mode)", type=parse_iso_datetime)
 
-    parser.add_argument('-c', '--camera', help=f"Camera name (i.e. rawimages subfolder name), repeat to specify multiple names. (default: {list(ALL_CAMERAS.keys())})", action='append')
+    parser.add_argument('-c', '--camera', help=f"Camera name (i.e. rawimages subfolder name), repeat to specify multiple names. (default: {QUICKLOOK_CAMERAS})", action='append')
     parser.add_argument('-X', '--data-root', help=f"Search directory for telem and rawimages subdirectories, repeat to specify multiple roots. (default: {LOOKYLOO_DATA_ROOTS.split(':')})", action='append')
     parser.add_argument('-O', '--omit-telemetry', help="Whether to omit references to telemetry files", action='store_true')
+    parser.add_argument('--ignore-data-integrity', help="[DEBUG USE ONLY]", action='store_true')
     parser.add_argument('-T', '--omit-symlink-tree', help="Whether to skip constructing the parallel structure of symlinks organizing observations by observer", action='store_true')
     parser.add_argument('-D', '--output-dir', help=f"output directory, defaults to current dir", action='store', default=os.getcwd())
     parser.add_argument('--xrif2fits-cmd', default='xrif2fits', help="Specify a path to an alternative version of xrif2fits here if desired", action='store')
@@ -77,7 +86,7 @@ def main():
     if args.camera is not None:
         cameras = args.camera
     else:
-        cameras = list(ALL_CAMERAS.keys())
+        cameras = QUICKLOOK_CAMERAS
     if args.data_root:
         data_roots = [pathlib.Path(x) for x in args.data_root]
     else:
@@ -113,7 +122,7 @@ def main():
         end_dt = args.utc_end
     else:
         end_dt = semester_end_dt
-    new_observation_spans, _ = get_new_observation_spans(data_roots, set(), start_dt, end_dt)
+    new_observation_spans, _ = get_new_observation_spans(data_roots, set(), start_dt, end_dt, ignore_data_integrity=args.ignore_data_integrity)
     if args.cube_mode_all:
         force_mode = DEFAULT_CUBE
     elif args.separate_mode_all:
@@ -121,8 +130,11 @@ def main():
     else:
         force_mode = None
 
+    spans_by_begin_dt = [(x.begin, x) for x in new_observation_spans]
+    spans_by_begin_dt.sort()
+
     with futures.ThreadPoolExecutor(max_workers=args.parallel_jobs) as threadpool:
-        for span in new_observation_spans:
+        for _, span in spans_by_begin_dt:
             if decide_to_process(args, span):
                 log.info(f"Observation interval to process: {span}")
                 process_span(
@@ -134,7 +146,7 @@ def main():
                     not args.omit_symlink_tree,
                     args.xrif2fits_cmd,
                     all_processed_files,
-                    True,
+                    args.ignore_history,
                     threadpool,
                     args.dry_run,
                     force_cube_or_separate=force_mode

@@ -82,7 +82,7 @@ def parse_observers_line(line):
     on = groups[9] == '1'
     return ObserverTelem(ts, email, obs, on)
 
-def parse_logdump_for_observers(telem_root : pathlib.Path, telem_path : pathlib.Path):
+def parse_logdump_for_observers(telem_root : pathlib.Path, telem_path : pathlib.Path, ignore_data_integrity : bool = False):
     args = ['logdump', f'--dir={telem_root.as_posix()}', '--ext=.bintel', telem_path.name]
     p1 = subprocess.Popen(
         args,
@@ -123,7 +123,7 @@ def parse_logdump_for_observers(telem_root : pathlib.Path, telem_path : pathlib.
             last_telem = this_telem
             yield this_telem
         returncode = p1.poll()
-        if returncode is not None and returncode != 0:
+        if (returncode is not None and returncode != 0) and not ignore_data_integrity:
             raise RuntimeError(f"Got exit code {returncode} from command " + " ".join(args))
 
 @dataclasses.dataclass(frozen=True, eq=True)
@@ -166,7 +166,7 @@ def load_file_history(history_path: pathlib.Path) -> typing.Set[TimestampedFile]
 def append_files_to_history(history_path, archive_paths, dry_run):
     if not len(archive_paths):
         return
-    archive_path_lines = [f"{p.as_posix()}\n" for p in archive_paths]
+    archive_path_lines = [f"{p.name}\n" for p in archive_paths]
     if not dry_run:
         with history_path.open('a') as fh:
             fh.writelines(archive_path_lines)
@@ -216,18 +216,19 @@ def get_matching_paths(
     return filtered_files
 
 
-def get_observation_telems(data_roots: typing.List[pathlib.Path], start_dt : datetime.datetime, end_dt : datetime.datetime):
+def get_observation_telems(data_roots: typing.List[pathlib.Path], start_dt : datetime.datetime, end_dt : datetime.datetime, ignore_data_integrity : bool):
     events = []
     observers_data_root = None
     for data_root in data_roots:
         obs_dev_path = data_root / 'telem'
+        log.debug(f"Scanning {obs_dev_path} for {OBSERVERS_DEVICE} telems")
         if len(list(obs_dev_path.glob(f'{OBSERVERS_DEVICE}_*.bintel'))):
             observers_data_root = obs_dev_path
             break
     if observers_data_root is None:
         raise RuntimeError(f"No {OBSERVERS_DEVICE} device telemetry in any of {[(x / 'telem').as_posix() for x in data_roots]}")
     for telem_path in get_matching_paths(observers_data_root, OBSERVERS_DEVICE, 'bintel', start_dt, end_dt):
-        events.extend(parse_logdump_for_observers(observers_data_root, telem_path.path))
+        events.extend(parse_logdump_for_observers(observers_data_root, telem_path.path, ignore_data_integrity))
     return events
 
 def transform_telems_to_spans(events : typing.List[ObserverTelem], start_dt : datetime.datetime, end_dt : typing.Optional[datetime.datetime]=None):
@@ -290,9 +291,10 @@ def get_new_observation_spans(
         data_roots: typing.List[pathlib.Path], 
         existing_observation_spans : typing.Set[ObservationSpan], 
         start_dt : datetime.datetime, 
-        end_dt : typing.Optional[datetime.datetime]=None
+        end_dt : typing.Optional[datetime.datetime]=None,
+        ignore_data_integrity : bool=False,
 ) -> tuple[set[ObservationSpan, datetime.datetime]]:
-    events = get_observation_telems(data_roots, start_dt, end_dt)
+    events = get_observation_telems(data_roots, start_dt, end_dt, ignore_data_integrity)
     spans, start_dt = transform_telems_to_spans(events, start_dt, end_dt)
     if len(spans):
         new_observation_spans = set(spans) - existing_observation_spans
@@ -310,7 +312,7 @@ def prune_outputs(scratch_dir, span):
             os.remove(fn)
             log.debug(f"Filtered: {fn} (\n\tts =\t{ts.isoformat()},\nspan.begin =\t{span.begin.isoformat()},\nspan.end =\t{span.end.isoformat() if span.end is not None else span.end})")
         else:
-            good_outputs.append(fn)
+            good_outputs.append(pathlib.Path(fn))
             log.debug(f"Kept: {fn}")
     return good_outputs
 
@@ -408,7 +410,7 @@ def do_quicklook_for_camera(
             if len(failed_paths) and not ignore_history:
                 append_files_to_history(failed_history_path, failed_paths, dry_run)
                 log.debug(f"{len(failed_paths)} paths failed to convert, saving to {failed_history_path}")
-            good_outputs = prune_outputs(scratch_dir, span)
+            good_outputs : list[pathlib.Path] = prune_outputs(scratch_dir, span)
             if len(good_outputs):
                 semester, night = datestamp_strings_from_ts(span.begin)
                 if cube_mode:
@@ -440,7 +442,7 @@ def do_quicklook_for_camera(
                             log.debug(f"Making link at {observer_semester_prefix} pointing to {semester_observer_prefix}")
                             observer_semester_prefix.symlink_to(semester_observer_prefix)
                     for fn in good_outputs:
-                        shutil.copy(fn, destination)
+                        shutil.copyfile(fn, destination / fn.name)
                 log.info(f"Wrote {len(good_outputs)} output file{'s' if len(good_outputs) != 1 else ''} to {destination}")
     return new_matching_files
 
