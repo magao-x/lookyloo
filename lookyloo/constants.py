@@ -5,8 +5,8 @@ import re
 LOOKYLOO_DATA_ROOTS = os.environ.get('LOOKYLOO_DATA_PATHS', '/opt/MagAOX:/srv/icc/data:/srv/rtc/data')
 QUICKLOOK_PATH = pathlib.Path('/data/obs')
 LOG_PATH = pathlib.Path('/opt/MagAOX/logs/lookyloo')
-HISTORY_FILENAME = "lookyloo_success.txt"
-FAILED_HISTORY_FILENAME = "lookyloo_failed.txt"
+HISTORY_FILENAME = ".lookyloo_succeeded"
+FAILED_HISTORY_FILENAME = ".lookyloo_failed"
 DEFAULT_SEPARATE = object()
 DEFAULT_CUBE = object()
 ALL_CAMERAS = {

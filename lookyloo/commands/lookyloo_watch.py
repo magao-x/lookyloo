@@ -30,6 +30,7 @@ def daemon_mode(
     executor : futures.ThreadPoolExecutor,
     dry_run : bool,
     ignore_data_integrity: bool,
+    symlink_tree_dir: typing.Optional[pathlib.Path]=None,
 ):
     existing_observation_spans = set()
     log.info(f"Started at {datetime.datetime.now().isoformat()}, looking for unprocessed observations since {start_dt}...")
@@ -41,7 +42,20 @@ def daemon_mode(
             start_dt : datetime.datetime = result[1]
             spans_with_data = set()
             for span in new_observation_spans:
-                process_span(span, output_dir, cameras, data_roots, omit_telemetry, construct_symlink_tree, xrif2fits_cmd, all_visited_files, ignore_history, executor, dry_run)
+                process_span(
+                    span,
+                    output_dir,
+                    cameras,
+                    data_roots,
+                    omit_telemetry,
+                    xrif2fits_cmd,
+                    all_visited_files,
+                    ignore_history,
+                    executor,
+                    dry_run,
+                    symlink_tree_dir=symlink_tree_dir,
+                    ignore_data_integrity=ignore_data_integrity,
+                )
                 if span.end is not None:
                     spans_with_data.add(span)
             existing_observation_spans = existing_observation_spans.union(spans_with_data)
@@ -66,12 +80,22 @@ def main():
     parser.add_argument('-X', '--data-root', help=f"Search directory for telem and rawimages subdirectories, repeat to specify multiple roots. (default: {LOOKYLOO_DATA_ROOTS.split(':')})", action='append')
     parser.add_argument('-D', '--output-dir', help=f"output directory, defaults to {QUICKLOOK_PATH.as_posix()}", action='store', default=QUICKLOOK_PATH.as_posix())
     parser.add_argument('-L', '--log-dir', help=f"output directory, defaults to {LOG_PATH.as_posix()}", action='store', default=LOG_PATH.as_posix())
+    parser.add_argument('--symlink-tree-dir', default=None, help="Root directory to construct symlink tree in (paths will have the form <symlink_tree_dir>/2023A/...), defaults to same as output dir")
     parser.add_argument('-j', '--parallel-jobs', default=8, help="Max number of parallel xrif2fits processes to launch (if the number of archives in an interval is smaller than this, fewer processes will be launched)")
     parser.add_argument('--ignore-data-integrity', help="[DEBUG USE ONLY]", action='store_true')
     args = parser.parse_args()
     output_path = pathlib.Path(args.output_dir)
     if not output_path.is_dir():
         output_path.mkdir(parents=True, exist_ok=True)
+
+    if args.symlink_tree_dir is None:
+        symlink_tree_dir = output_dir
+    else:
+        symlink_tree_dir = pathlib.Path(args.symlink_tree_dir)
+    log.debug(f"Creating a tree of symbolic links in {symlink_tree_dir} to organize outputs")
+    if not symlink_tree_dir.is_dir():
+        symlink_tree_dir.mkdir(parents=True, exist_ok=True)
+
     if not os.path.isdir(args.log_dir):
         os.makedirs(args.log_dir, exist_ok=True)
     log_file_path = f"{args.log_dir}/lookyloo_{time.time()}.log" if args.verbose or args.dry_run else None
@@ -132,6 +156,7 @@ def main():
             ignore_history=args.ignore_history,
             executor=threadpool,
             dry_run=args.dry_run,
+            symlink_tree_dir=args.symlink_tree_dir,
         )
     finally:
         threadpool.shutdown()

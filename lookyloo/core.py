@@ -153,12 +153,12 @@ def path_to_timestamped_file(the_path : pathlib.Path) -> TimestampedFile:
         raise
     return TimestampedFile(the_path, ts)
 
-def load_file_history(history_path: pathlib.Path) -> typing.Set[TimestampedFile]:
-    history : typing.Set[TimestampedFile] = set()
+def load_file_history(history_path: pathlib.Path) -> typing.Set[str]:
+    history : typing.Set[str] = set()
     try:
         with history_path.open('r') as fh:
             for line in fh:
-                history.add(path_to_timestamped_file(pathlib.Path(line.strip())))
+                history.add(line.strip())
     except FileNotFoundError:
         log.debug(f"Could not find lookyloo history at {history_path}")
     return history
@@ -168,12 +168,13 @@ def append_files_to_history(history_path, archive_paths, dry_run):
         return
     archive_path_lines = [f"{p.name}\n" for p in archive_paths]
     if not dry_run:
+        log.debug(f"Appending to history file {history_path}: {archive_path_lines}")
         with history_path.open('a') as fh:
             fh.writelines(archive_path_lines)
     else:
         log.debug(f"dry run: appending to history file {history_path}")
         for p in archive_paths:
-            log.debug(f"dry run: appending {p.as_posix()}")
+            log.debug(f"dry run: appending {p.name}")
 
 def find_device_names_in_folder(base_path : pathlib.Path, extension : str) -> typing.Set[str]:
     device_names = set()
@@ -187,7 +188,8 @@ def get_matching_paths(
     device : str,
     extension : str,
     newer_than_dt: datetime.datetime,
-    older_than_dt: datetime.datetime=None
+    older_than_dt: datetime.datetime=None,
+    grab_one_before_start=False,
 ) -> typing.List[TimestampedFile]:
     newer_than_dt_fn = f"{device}_{newer_than_dt.strftime(MODIFIED_TIME_FORMAT)}000.{extension}"
     if older_than_dt is not None:
@@ -206,8 +208,12 @@ def get_matching_paths(
         if (
             the_path.name > newer_than_dt_fn or
             (idx + 1 < n_files and all_matching_files[idx+1].name > newer_than_dt_fn) or
-            idx == n_files - 1
+            (idx == n_files - 1)
         ):
+            if not grab_one_before_start and the_path.name < newer_than_dt_fn:
+                # can't find any in-range entries from files that were opened before this
+                # span started (assuming files start writing after spans begin, grab_one_before_start==False) so skip
+                continue
             if older_than_dt is not None and the_path.name > older_than_dt_fn:
                 # can't find in-range entries from files opened after `older_than_dt`
                 # so skip
@@ -227,7 +233,7 @@ def get_observation_telems(data_roots: typing.List[pathlib.Path], start_dt : dat
             break
     if observers_data_root is None:
         raise RuntimeError(f"No {OBSERVERS_DEVICE} device telemetry in any of {[(x / 'telem').as_posix() for x in data_roots]}")
-    for telem_path in get_matching_paths(observers_data_root, OBSERVERS_DEVICE, 'bintel', start_dt, end_dt):
+    for telem_path in get_matching_paths(observers_data_root, OBSERVERS_DEVICE, 'bintel', start_dt, end_dt, grab_one_before_start=True):
         events.extend(parse_logdump_for_observers(observers_data_root, telem_path.path, ignore_data_integrity))
     return events
 
@@ -288,9 +294,9 @@ def transform_telems_to_spans(events : typing.List[ObserverTelem], start_dt : da
     return spans, start_dt
 
 def get_new_observation_spans(
-        data_roots: typing.List[pathlib.Path], 
-        existing_observation_spans : typing.Set[ObservationSpan], 
-        start_dt : datetime.datetime, 
+        data_roots: typing.List[pathlib.Path],
+        existing_observation_spans : typing.Set[ObservationSpan],
+        start_dt : datetime.datetime,
         end_dt : typing.Optional[datetime.datetime]=None,
         ignore_data_integrity : bool=False,
 ) -> tuple[set[ObservationSpan, datetime.datetime]]:
@@ -303,12 +309,18 @@ def get_new_observation_spans(
     else:
         return set(), start_dt
 
-def prune_outputs(scratch_dir, span):
+def prune_outputs(scratch_dir, span, exclude_before=True, exclude_after=False):
     good_outputs = []
-    sorted_matches = list(sorted(scratch_dir.glob("*.fits")))
+    sorted_matches = list(sorted(scratch_dir.glob("*")))
     for fn in sorted_matches:
+        if not fn.name.endswith('.fits'):
+            log.debug(f"Filtered: {fn}")
+            os.remove(fn)
+            continue
         ts = xfilename_to_utc_timestamp(fn)
-        if ts < span.begin or (span.end is not None and ts > span.end):
+        is_before = ts < span.begin
+        is_after = span.end is not None and ts > span.end
+        if (exclude_before and is_before) or (exclude_after and is_after):
             os.remove(fn)
             log.debug(f"Filtered: {fn} (\n\tts =\t{ts.isoformat()},\nspan.begin =\t{span.begin.isoformat()},\nspan.end =\t{span.end.isoformat() if span.end is not None else span.end})")
         else:
@@ -350,131 +362,143 @@ def datestamp_strings_from_ts(ts : datetime.datetime):
 def catalog_name_from_outputs(output_files):
     catobj = None
     for fn in output_files:
+        log.debug(f"catalog name: {fn=}")
+        if not fn.name.endswith('.fits'):
+            log.debug(f"catalog name: skipped")
+            continue
         with open(fn, 'rb') as fh:
             header = fits.getheader(fh)
             catobj = header.get('CATOBJ')
-            if catobj == 'invalid':
+            if catobj == 'invalid' or len(catobj.replace('*', '')) == 0:
+                log.debug(f"catalog name: invalid")
                 catobj = None
         if catobj is not None:
+            log.debug(f"catalog name: {catobj}")
             break
-    if catobj is None or len(catobj.replace('*', '')) == 0:
+    if catobj is None:
         return '_no_target_'
     return catobj
 
 def do_quicklook_for_camera(
-    span : ObservationSpan, 
-    data_roots, 
+    span : ObservationSpan,
+    data_roots,
     device,
     omit_telemetry,
     output_dir,
     dry_run, cube_mode,
-    construct_symlink_tree,
     executor : futures.ThreadPoolExecutor,
+    symlink_tree_dir: pathlib.Path=None,
     all_visited_files=None,
     xrif2fits_cmd='xrif2fits',
     ignore_history=False,
+    ignore_data_integrity: bool=False,
 ):
     if all_visited_files is None:
         all_visited_files = set()
-    history_path = output_dir / HISTORY_FILENAME
-    failed_history_path = output_dir / FAILED_HISTORY_FILENAME
+
     for data_root in data_roots:
         image_path = data_root / 'rawimages' / device
         if image_path.is_dir():
             break
     if not image_path.is_dir():  # no iteration succeeded in the loop preceding
         raise RuntimeError(f"Unknown device: {device} (checked {data_roots})")
+    semester, night = datestamp_strings_from_ts(span.begin)
+    if len(span.title):
+        title = f"{span.begin.strftime(FOLDER_TIMESTAMP_FORMAT)}_{span.title}"
+    else:
+        title = f"{span.begin.strftime(FOLDER_TIMESTAMP_FORMAT)}"
+    if not span.email:
+        email = "_no_email_"
+    else:
+        email = span.email
+    # 2022B / 2022-02-02_03 / a@b.edu / (20220202T235959_cal_sirius / camsci1)
+    semester_observer_prefix = output_dir / semester / night / email
+
+    destination = semester_observer_prefix / title / device
+    history_path = destination / HISTORY_FILENAME
+    failed_history_path = destination / FAILED_HISTORY_FILENAME
     log.debug(f"Checking {image_path} ...")
     matching_files = set(get_matching_paths(image_path, device, 'xrif', newer_than_dt=span.begin, older_than_dt=span.end))
-    new_matching_files = matching_files - all_visited_files
+    all_visited_files = load_file_history(history_path)
+    log.debug(f"Loaded previously visited files: {all_visited_files}")
+    new_matching_files = set(x for x in matching_files if x.path.name not in all_visited_files)
     if len(new_matching_files) == 0 and len(all_visited_files) > 0:
-        log.debug(f"Already processed all {len(matching_files & all_visited_files)} matching files")
+        log.debug(f"Already processed all {len(matching_files)} matching files")
     if len(new_matching_files):
+        if not dry_run:
+            destination.mkdir(parents=True, exist_ok=True)
         log.debug(f"Matching files:")
         for fn in sorted(new_matching_files, key=lambda x: x.timestamp):
             log.debug(f"\t{fn} (new)")
+        successful_paths, failed_paths = convert_xrif(
+            image_path, data_roots, new_matching_files, destination, omit_telemetry, dry_run, cube_mode,
+            xrif2fits_cmd, executor, ignore_data_integrity
+        )
+        if not dry_run:
+            log.debug("Pruning outputs that don't lie in this span")
+            kept_output_files = prune_outputs(destination, span)
+        else:
+            log.debug("dry run: prune files outside the span")
+            kept_output_files = []
+        if len(kept_output_files) and symlink_tree_dir is not None and not dry_run:
+            catalog_name = catalog_name_from_outputs(kept_output_files)
+            # a@b.edu / 2022B / 2022-02-02_03 / Sirius / (20220202T235959_cal_sirius / camsci1)
+            observer_semester_prefix = symlink_tree_dir / email / semester / night / catalog_name
+            observer_semester_prefix.parent.mkdir(parents=True, exist_ok=True)
+            if not observer_semester_prefix.is_symlink():
+                log.debug(f"Making link at {observer_semester_prefix} pointing to {semester_observer_prefix}")
+                try:
+                    observer_semester_prefix.symlink_to(semester_observer_prefix)
+                except OSError as e:
+                    log.exception(f"Could not make a symbolic link at {observer_semester_prefix} pointing to {semester_observer_prefix} (unsupported by destination filesystem, maybe?)")
+        for archive_path in successful_paths:
+            log.info(f"Converted {archive_path}")
+        for archive_path in failed_paths:
+            log.info(f"Failed    {archive_path}")
+        if len(successful_paths) and not ignore_history:
+            append_files_to_history(history_path, successful_paths, dry_run)
+            log.debug(f"Wrote {len(successful_paths)} to {history_path}")
+        if len(failed_paths) and not ignore_history:
+            append_files_to_history(failed_history_path, failed_paths, dry_run)
+            log.debug(f"{len(failed_paths)} paths failed to convert, saving to {failed_history_path}")
 
-        with tempfile.TemporaryDirectory(dir="/opt/MagAOX/scratch") as scratch_dir_path:
-            scratch_dir = pathlib.Path(scratch_dir_path)
-            successful_paths, failed_paths = convert_xrif(
-                image_path, data_roots, new_matching_files, scratch_dir, omit_telemetry, dry_run, cube_mode,
-                xrif2fits_cmd, executor
-            )
-            for archive_path in successful_paths:
-                log.info(f"Converted {archive_path}")
-            for archive_path in failed_paths:
-                log.info(f"Failed    {archive_path}")
-            if len(successful_paths) and not ignore_history:
-                append_files_to_history(history_path, successful_paths, dry_run)
-                log.debug(f"Wrote {len(successful_paths)} to {history_path}")
-            if len(failed_paths) and not ignore_history:
-                append_files_to_history(failed_history_path, failed_paths, dry_run)
-                log.debug(f"{len(failed_paths)} paths failed to convert, saving to {failed_history_path}")
-            good_outputs : list[pathlib.Path] = prune_outputs(scratch_dir, span)
-            if len(good_outputs):
-                semester, night = datestamp_strings_from_ts(span.begin)
-                if cube_mode:
-                    catalog_name = "cubes"
-                elif not dry_run:
-                    catalog_name = catalog_name_from_outputs(good_outputs)
-                else:
-                    catalog_name = "_no_catobj_"
-                
-                if len(span.title):
-                    title = f"{span.title}_{span.begin.strftime(FOLDER_TIMESTAMP_FORMAT)}"
-                else:
-                    title = f"{span.begin.strftime(FOLDER_TIMESTAMP_FORMAT)}"
-                if not span.email:
-                    email = "_no_email_"
-                else:
-                    email = span.email
-                # a@b.com / 2022B / 20_21 / sirius / (cal_20220202T235959 / camsci1)
-                observer_semester_prefix = output_dir / email / semester / night / catalog_name
-                # 2022B / 20_21 / sirius / a@b.com / (cal_20220202T235959 / camsci1)
-                semester_observer_prefix = output_dir / semester / night / catalog_name / email
-
-                destination = semester_observer_prefix / title / device
-                if not dry_run:
-                    destination.mkdir(parents=True, exist_ok=True)
-                    if construct_symlink_tree:
-                        observer_semester_prefix.parent.mkdir(parents=True, exist_ok=True)
-                        if not observer_semester_prefix.is_symlink():
-                            log.debug(f"Making link at {observer_semester_prefix} pointing to {semester_observer_prefix}")
-                            observer_semester_prefix.symlink_to(semester_observer_prefix)
-                    for fn in good_outputs:
-                        shutil.copyfile(fn, destination / fn.name)
-                log.info(f"Wrote {len(good_outputs)} output file{'s' if len(good_outputs) != 1 else ''} to {destination}")
+        log.info(f"Wrote {len(successful_paths)} output file{'s' if len(successful_paths) != 1 else ''} to {destination}")
     return new_matching_files
 
-def launch_xrif2fits(args, dry_run=False):
-    command_line = " ".join(args)
+def launch_xrif2fits(args : list[str], telem_args : list[str], dry_run=False):
+    command_line = " ".join(args + telem_args)
     if not dry_run:
         log.debug(f"Launching: {command_line}")
         try:
             proc = subprocess.Popen(
-                args,
+                args + telem_args,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
             proc.wait(timeout=XRIF2FITS_TIMEOUT_SEC)
-            success = True
-        except subprocess.CalledProcessError as e:
-            log.exception("xrif2fits exited with nonzero exit code")
-            success = False
+            success = proc.returncode == 0
+            if not success:
+                log.error(f"xrif2fits exited with nonzero exit code. Command was: {command_line}")
         except subprocess.TimeoutExpired as e:
-            log.exception("xrif2fits canceled after timeout")
+            log.error(f"xrif2fits canceled after {XRIF2FITS_TIMEOUT_SEC} sec timeout. Command was: {command_line}")
             proc.kill()
             success = False
     else:
         success = True
         log.debug(f"dry run: {command_line}")
+    if len(telem_args) != 0 and not success:
+        no_telem_success, no_telem_command_line = launch_xrif2fits(args, [], dry_run=dry_run)
+        if no_telem_success:
+            log.error(f"Reprocessing without telemetry succeded. Original command: {command_line}, revised command: {no_telem_command_line}")
+        else:
+            log.error(f"Reprocessing without telemetry failed. Original command: {command_line}, revised command: {no_telem_command_line}")
     return success, command_line
 
 def convert_xrif(
     base_dir, data_roots: typing.List[pathlib.Path],
     paths : typing.List[TimestampedFile], destination_path : pathlib.Path,
     omit_telemetry : bool, dry_run : bool, cube_mode : bool, xrif2fits_cmd: str,
-    executor : futures.ThreadPoolExecutor
+    executor : futures.ThreadPoolExecutor, ignore_data_integrity : bool
 ):
     for data_file in paths:
         delta = datetime.datetime.utcnow().replace(tzinfo=timezone.utc) - data_file.timestamp
@@ -483,6 +507,7 @@ def convert_xrif(
     failed_commands = []
     successful_paths, failed_paths = [], []
     pending_xrif2fits_procs = []
+    task_to_ts_path_lookup = {}
     for ts_path in paths:
         args = [
             xrif2fits_cmd,
@@ -495,25 +520,23 @@ def convert_xrif(
         if not omit_telemetry:
             telem_paths_str = ','.join((x / 'telem').as_posix() for x in data_roots)
             log_paths_str = ','.join((x / 'logs').as_posix() for x in data_roots)
-            no_telem_args = args.copy()
-            args.extend([
+
+            telem_args = [
                 '-t', telem_paths_str,
                 '-l', log_paths_str,
-            ])
-        fut = executor.submit(launch_xrif2fits, args, dry_run=dry_run)
+            ]
+        else:
+            telem_args = []
+        fut = executor.submit(launch_xrif2fits, args, telem_args, dry_run=dry_run)
         pending_xrif2fits_procs.append(fut)
+        task_to_ts_path_lookup[fut] = ts_path
 
     for fut in futures.as_completed(pending_xrif2fits_procs):
+        ts_path = task_to_ts_path_lookup[fut]
         success, command_line = fut.result()
         if not success:
             failed_commands.append(command_line)
             failed_paths.append(ts_path.path)
-            if not omit_telemetry:
-                # try again without telemetry
-                success, revised_command_line = launch_xrif2fits(no_telem_args, dry_run=dry_run)
-                if not success:
-                    raise RuntimeError(f"Retried {ts_path.path} without telemetry and xrif2fits still errored! Bailing out.\n\tcommand: {revised_command_line}")
-                log.warn(f"Converting {ts_path} succeeded after omitting telemetry. Command line was: {revised_command_line} (originally: {command_line})")
         else:
             successful_paths.append(ts_path.path)
 
@@ -543,13 +566,14 @@ def process_span(
     span : ObservationSpan,
     output_dir : pathlib.Path, cameras : typing.List[str],
     data_roots: typing.List[pathlib.Path], omit_telemetry : bool,
-    construct_symlink_tree: bool,
     xrif2fits_cmd: str,
     all_visited_files: typing.List[TimestampedFile],
     ignore_history: bool,
     executor : futures.ThreadPoolExecutor,
     dry_run : bool,
     force_cube_or_separate : typing.Optional[object]=None,
+    symlink_tree_dir: pathlib.Path=None,
+    ignore_data_integrity:bool=False,
 ):
     log.info(f"Observation interval to process: {span}")
     for device in cameras:
@@ -566,11 +590,12 @@ def process_span(
             output_dir,
             dry_run,
             cube_mode,
-            construct_symlink_tree,
             executor=executor,
+            symlink_tree_dir=symlink_tree_dir,
             all_visited_files=all_visited_files,
             xrif2fits_cmd=xrif2fits_cmd,
             ignore_history=ignore_history,
+            ignore_data_integrity=ignore_data_integrity,
         )
         all_visited_files = all_visited_files.union(visited_files)
         if len(visited_files) and (span.end is not None and (utcnow() - span.end).total_seconds() > 5 * 60):
@@ -685,7 +710,7 @@ def create_bundle_from_span(
             log.debug(f"mkdir {subfolder_path}")
         else:
             log.debug(f"dry run: mkdir {subfolder_path}")
-    
+
     bundle_contents = []
     for data_root in data_roots:
         # collect logs
@@ -697,6 +722,7 @@ def create_bundle_from_span(
                 extension='binlog',
                 newer_than_dt=span.begin,
                 older_than_dt=span.end,
+                grab_one_before_start=True,
             )
             if not len(log_files):
                 continue
@@ -718,7 +744,8 @@ def create_bundle_from_span(
                 device=devname,
                 extension='bintel',
                 newer_than_dt=span.begin,
-                older_than_dt=span.end
+                older_than_dt=span.end,
+                grab_one_before_start=True,
             )
             if not len(telem_files):
                 continue
