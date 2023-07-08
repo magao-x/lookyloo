@@ -83,7 +83,7 @@ def parse_observers_line(line):
     return ObserverTelem(ts, email, obs, on)
 
 def parse_logdump_for_observers(telem_root : pathlib.Path, telem_path : pathlib.Path, ignore_data_integrity : bool = False):
-    args = ['logdump', f'--dir={telem_root.as_posix()}', '--ext=.bintel', telem_path.name]
+    args = ['logdump', '--ext=.bintel', '-F', telem_path.as_posix()]
     p1 = subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
@@ -403,18 +403,16 @@ def do_quicklook_for_camera(
     if not image_path.is_dir():  # no iteration succeeded in the loop preceding
         raise RuntimeError(f"Unknown device: {device} (checked {data_roots})")
     semester, night = datestamp_strings_from_ts(span.begin)
-    if len(span.title):
-        title = f"{span.begin.strftime(FOLDER_TIMESTAMP_FORMAT)}_{span.title}"
-    else:
-        title = f"{span.begin.strftime(FOLDER_TIMESTAMP_FORMAT)}"
+    title = f"{span.begin.strftime(FOLDER_TIMESTAMP_FORMAT)}_{span.title}"
+
     if not span.email:
         email = "_no_email_"
     else:
         email = span.email
-    # 2022B / 2022-02-02_03 / a@b.edu / (20220202T235959_cal_sirius / camsci1)
-    semester_observer_prefix = output_dir / semester / night / email
+    # ... / 2022B / a@b.edu / 2022-02-02_020304_label
+    simple_observer_prefix = output_dir / semester / email / title
 
-    destination = semester_observer_prefix / title / device
+    destination = simple_observer_prefix / device
     history_path = destination / HISTORY_FILENAME
     failed_history_path = destination / FAILED_HISTORY_FILENAME
     log.debug(f"Checking {image_path} ...")
@@ -442,15 +440,16 @@ def do_quicklook_for_camera(
             kept_output_files = []
         if len(kept_output_files) and symlink_tree_dir is not None and not dry_run:
             catalog_name = catalog_name_from_outputs(kept_output_files)
-            # a@b.edu / 2022B / 2022-02-02_03 / Sirius / (20220202T235959_cal_sirius / camsci1)
-            observer_semester_prefix = symlink_tree_dir / email / semester / night / catalog_name
-            observer_semester_prefix.parent.mkdir(parents=True, exist_ok=True)
-            if not observer_semester_prefix.is_symlink():
-                log.debug(f"Making link at {observer_semester_prefix} pointing to {semester_observer_prefix}")
+            # ... / a@b.edu / 2022B / Sirius / 2022-02-02_020304_label -> (../../../../2022B/a@b.edu/2022-02-02_020304_label)
+            friendly_observer_semester_prefix = symlink_tree_dir / email / semester / catalog_name / night / title
+            friendly_observer_semester_prefix.parent.mkdir(parents=True, exist_ok=True)
+            if not friendly_observer_semester_prefix.is_symlink():
+                relpath_to_simple_destination = os.path.relpath(simple_observer_prefix, start=friendly_observer_semester_prefix.parent)
+                log.debug(f"Making link at {friendly_observer_semester_prefix} pointing to {relpath_to_simple_destination}")
                 try:
-                    observer_semester_prefix.symlink_to(semester_observer_prefix)
+                    friendly_observer_semester_prefix.symlink_to(relpath_to_simple_destination)
                 except OSError as e:
-                    log.exception(f"Could not make a symbolic link at {observer_semester_prefix} pointing to {semester_observer_prefix} (unsupported by destination filesystem, maybe?)")
+                    log.exception(f"Could not make a symbolic link at {friendly_observer_semester_prefix} pointing to {relpath_to_simple_destination} (unsupported by destination filesystem, maybe?)")
         for archive_path in successful_paths:
             log.info(f"Converted {archive_path}")
         for archive_path in failed_paths:

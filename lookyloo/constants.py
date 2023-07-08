@@ -33,4 +33,4 @@ LINE_FORMAT_REGEX = re.compile(
     r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{6})(?:\d{3}) "
     r"TELM \[observer\] email: (.*) obs: (.*) (\d)"
 )
-FOLDER_TIMESTAMP_FORMAT = '%Y%m%dT%H%M%S'
+FOLDER_TIMESTAMP_FORMAT = '%Y-%m-%d_%H%M%S'
