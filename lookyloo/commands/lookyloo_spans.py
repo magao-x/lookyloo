@@ -66,8 +66,19 @@ def main():
         start_ts = obs.begin.isoformat()
         if obs.end is None:
             end_ts = 'ongoing'
-            sec_elapsed = (utcnow() - obs.begin).total_seconds()
         else:
             end_ts = obs.end.isoformat()
-            sec_elapsed = (obs.end - obs.begin).total_seconds()
-        print(f"{start_ts}\t{end_ts}\t{int(sec_elapsed)}\t{repr(obs.email)}\t{repr(obs.title)}")
+
+        should_display = True
+
+        if args.title is not None:
+            if not args.partial_match_ok and obs.title.lower() != args.title.lower():
+                should_display = False
+            elif args.partial_match_ok and args.title.lower() not in obs.title.lower():
+                should_display = False
+        if args.observer_email is not None:
+            if args.observer_email.lower() not in obs.email:
+                should_display = False
+
+        if should_display:
+            print(f"{start_ts}\t{end_ts}\t{repr(obs.email)}\t{repr(obs.title)}")
