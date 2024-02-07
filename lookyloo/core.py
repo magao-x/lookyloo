@@ -368,7 +368,7 @@ def catalog_name_from_outputs(output_files):
             continue
         with open(fn, 'rb') as fh:
             header = fits.getheader(fh)
-            catobj = header.get('CATOBJ')
+            catobj = header.get('CATOBJ', 'invalid')
             if catobj == 'invalid' or len(catobj.replace('*', '')) == 0:
                 log.debug(f"catalog name: invalid")
                 catobj = None
