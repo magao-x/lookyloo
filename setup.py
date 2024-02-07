@@ -35,10 +35,7 @@ setup(
     extras_require=extras,
     entry_points={
         'console_scripts': [
-            f'lookynext={PROJECT}.commands.lookyloo:main',
-            f'lookyloo_watch={PROJECT}.commands.lookyloo_watch:main',
-            f'lookyloo_bundle={PROJECT}.commands.lookyloo_bundle:main',
-            f'lookyloo_spans={PROJECT}.commands.lookyloo_spans:main',
+            f'lookyloo={PROJECT}.commands.lookyloo:main',
         ],
     },
     project_urls={  # Optional
