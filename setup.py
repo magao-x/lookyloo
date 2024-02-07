@@ -36,6 +36,9 @@ setup(
     entry_points={
         'console_scripts': [
             f'lookyloo={PROJECT}.commands.lookyloo:main',
+            f'lookyloo_watch={PROJECT}.commands.lookyloo_watch:main',
+            f'lookyloo_bundle={PROJECT}.commands.lookyloo_bundle:main',
+            f'lookyloo_spans={PROJECT}.commands.lookyloo_spans:main',
         ],
     },
     project_urls={  # Optional
