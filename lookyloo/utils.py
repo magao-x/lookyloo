@@ -21,6 +21,11 @@ def utcnow():
 def format_timestamp_for_filename(ts):
     return ts.strftime(FOLDER_TIMESTAMP_FORMAT)
 
+def get_current_semester():
+    now = datetime.datetime.now()
+    this_year = now.year
+    this_semester = str(this_year) + ("B" if now.month > 6 else "A")
+    return this_semester
 
 def get_search_start_end_timestamps(
     semester : str,

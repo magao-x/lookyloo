@@ -10,7 +10,7 @@ from datetime import timezone
 from concurrent import futures
 
 from ..constants import HISTORY_FILENAME, AUTO_EXPORT_CAMERAS, LOOKYLOO_DATA_ROOTS, QUICKLOOK_PATH, DEFAULT_CUBE, DEFAULT_SEPARATE, CHECK_INTERVAL_SEC, LOG_PATH
-from ..utils import parse_iso_datetime, utcnow
+from ..utils import parse_iso_datetime, utcnow, get_current_semester
 from ..core import (
     load_file_history, TimestampedFile, ObservationSpan, do_quicklook_for_camera, get_new_observation_spans,
     process_span,
@@ -21,7 +21,7 @@ log = logging.getLogger('lookyloo')
 
 def daemon_mode(
     output_dir : pathlib.Path, cameras : typing.List[str],
-    data_roots: typing.List[pathlib.Path], omit_telemetry : bool,
+    data_roots: typing.List[pathlib.Path],
     construct_symlink_tree: bool,
     xrif2fits_cmd: str,
     start_dt: datetime.datetime,
@@ -31,6 +31,7 @@ def daemon_mode(
     dry_run : bool,
     ignore_data_integrity: bool,
     symlink_tree_dir: typing.Optional[pathlib.Path]=None,
+    omit_telemetry : bool=False,
 ):
     existing_observation_spans = set()
     log.info(f"Started at {datetime.datetime.now().isoformat()}, looking for unprocessed observations since {start_dt}...")
@@ -41,7 +42,7 @@ def daemon_mode(
             new_observation_spans : typing.List[ObservationSpan] = result[0]
             start_dt : datetime.datetime = result[1]
             spans_with_data = set()
-            for span in new_observation_spans:
+            for span in sorted(new_observation_spans, key=lambda x: x.begin, reverse=True):
                 process_span(
                     span,
                     output_dir,
@@ -70,9 +71,6 @@ def daemon_mode(
 
 
 def main():
-    now = datetime.datetime.now()
-    this_year = now.year
-    this_semester = str(this_year) + ("B" if now.month > 6 else "A")
     parser = argparse.ArgumentParser(description="Quicklookyloo")
     parser.add_argument('-r', '--dry-run', help="Commands to run are printed in debug output (implies --verbose)", action='store_true')
     parser.add_argument('-i', '--ignore-history', help=f"When a history file ({HISTORY_FILENAME}) is found under the output directory, don't skip files listed in it", action='store_true')
@@ -83,13 +81,15 @@ def main():
     parser.add_argument('--symlink-tree-dir', default=None, help="Root directory to construct symlink tree in (paths will have the form <symlink_tree_dir>/2023A/...), defaults to same as output dir")
     parser.add_argument('-j', '--parallel-jobs', default=8, help="Max number of parallel xrif2fits processes to launch (if the number of archives in an interval is smaller than this, fewer processes will be launched)")
     parser.add_argument('--ignore-data-integrity', help="[DEBUG USE ONLY]", action='store_true')
+    parser.add_argument('--xrif2fits-cmd', default='xrif2fits', help="Specify a path to an alternative version of xrif2fits here if desired", action='store')
+
     args = parser.parse_args()
     output_path = pathlib.Path(args.output_dir)
     if not output_path.is_dir():
         output_path.mkdir(parents=True, exist_ok=True)
 
     if args.symlink_tree_dir is None:
-        symlink_tree_dir = output_dir
+        symlink_tree_dir = output_path
     else:
         symlink_tree_dir = pathlib.Path(args.symlink_tree_dir)
     log.debug(f"Creating a tree of symbolic links in {symlink_tree_dir} to organize outputs")
@@ -121,41 +121,31 @@ def main():
         data_roots = [pathlib.Path(x) for x in LOOKYLOO_DATA_ROOTS.split(':')]
     output_dir = pathlib.Path(args.output_dir)
     all_processed_files = load_file_history(output_dir / HISTORY_FILENAME) if not args.ignore_history else set()
-    if args.utc_start is not None:
-        start_dt = args.utc_start
-        year = start_dt.year
-        month = 1 if start_dt.month < 6 else 6
-        semester_start_dt = datetime.datetime(year, month, 1)
-        semester_start_dt = semester_start_dt.replace(tzinfo=timezone.utc)
-    else:
-        letter = args.semester[-1].upper()
-        try:
 
-            if len(args.semester) != 5 or args.semester[-1].upper() not in ['A', 'B']:
-                raise ValueError()
-            year = int(args.semester[:-1])
-            month = 1 if letter == 'A' else 6
-            day = 15 if month == 6 else 1
-        except ValueError:
-            raise RuntimeError(f"Got {args.semester=} but need a 4 digit year + A or B (e.g. 2022A)")
-        semester_start_dt = datetime.datetime(year, month, 1)
-        semester_start_dt = semester_start_dt.replace(tzinfo=timezone.utc)
-        start_dt = semester_start_dt
+    semester = get_current_semester()
+    letter = semester[-1].upper()
+    year = int(semester[:-1])
+    month = 1 if letter == 'A' else 6
+
+    semester_start_dt = datetime.datetime(year, month, 1)
+    semester_start_dt = semester_start_dt.replace(tzinfo=timezone.utc)
+    start_dt = semester_start_dt
     threadpool = futures.ThreadPoolExecutor(max_workers=args.parallel_jobs)
+    construct_symlink_tree = True
 
     try:
         daemon_mode(
             output_dir,
             cameras,
             data_roots,
-            args.omit_telemetry,
-            not args.omit_symlink_tree,
+            construct_symlink_tree,
             args.xrif2fits_cmd,
             start_dt,
             all_processed_files,
             ignore_history=args.ignore_history,
             executor=threadpool,
             dry_run=args.dry_run,
+            ignore_data_integrity=args.ignore_data_integrity,
             symlink_tree_dir=args.symlink_tree_dir,
         )
     finally:
