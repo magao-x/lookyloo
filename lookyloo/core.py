@@ -416,7 +416,7 @@ def do_quicklook_for_camera(
     history_path = destination / HISTORY_FILENAME
     failed_history_path = destination / FAILED_HISTORY_FILENAME
     log.debug(f"Checking {image_path} ...")
-    matching_files = set(get_matching_paths(image_path, device, 'xrif', newer_than_dt=span.begin, older_than_dt=span.end))
+    matching_files = set(get_matching_paths(image_path, device, 'xrif', newer_than_dt=span.begin, older_than_dt=span.end, grab_one_before_start=True))
     all_visited_files = load_file_history(history_path)
     log.debug(f"Loaded previously visited files: {all_visited_files}")
     new_matching_files = set(x for x in matching_files if x.path.name not in all_visited_files)
@@ -772,7 +772,8 @@ def create_bundle_from_span(
                 device=imgdir.name,
                 extension='xrif',
                 newer_than_dt=span.begin,
-                older_than_dt=span.end
+                older_than_dt=span.end,
+                grab_one_before_start=True,
             )
             if not len(cam_files):
                 continue
