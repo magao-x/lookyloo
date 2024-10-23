@@ -362,15 +362,15 @@ def datestamp_strings_from_ts(ts : datetime.datetime):
 def catalog_name_from_outputs(output_files):
     catobj = None
     for fn in output_files:
-        log.debug(f"catalog name: {fn=}")
         if not fn.name.endswith('.fits'):
-            log.debug(f"catalog name: skipped")
+            log.debug(f"Skipping {fn.name} because it's not FITS")
             continue
+        log.debug(f"Checking for catalog name from {fn=} header")
         with open(fn, 'rb') as fh:
             header = fits.getheader(fh)
-            catobj = header.get('CATOBJ', 'invalid')
+            catobj = header.get('OBJECT', 'invalid')
             if catobj == 'invalid' or len(catobj.replace('*', '')) == 0:
-                log.debug(f"catalog name: invalid")
+                log.debug(f"Could not determine catalog object name from OBJECT keyword in FITS header of {fn=} (keyword missing)")
                 catobj = None
         if catobj is not None:
             log.debug(f"catalog name: {catobj}")
@@ -396,12 +396,6 @@ def do_quicklook_for_camera(
     if all_visited_files is None:
         all_visited_files = set()
 
-    for data_root in data_roots:
-        image_path = data_root / 'rawimages' / device
-        if image_path.is_dir():
-            break
-    if not image_path.is_dir():  # no iteration succeeded in the loop preceding
-        raise RuntimeError(f"Unknown device: {device} (checked {data_roots})")
     semester, night = datestamp_strings_from_ts(span.begin)
     title = f"{span.begin.strftime(FOLDER_TIMESTAMP_FORMAT)}_{span.title}"
 
@@ -415,8 +409,15 @@ def do_quicklook_for_camera(
     destination = simple_observer_prefix / device
     history_path = destination / HISTORY_FILENAME
     failed_history_path = destination / FAILED_HISTORY_FILENAME
-    log.debug(f"Checking {image_path} ...")
-    matching_files = set(get_matching_paths(image_path, device, 'xrif', newer_than_dt=span.begin, older_than_dt=span.end, grab_one_before_start=True))
+
+    matching_files = set()
+    for data_root in data_roots:
+        image_path = data_root / 'rawimages' / device
+        log.debug(f"Checking {image_path} ...")
+        matching_files = matching_files.union(get_matching_paths(image_path, device, 'xrif', newer_than_dt=span.begin, older_than_dt=span.end, grab_one_before_start=True))
+    if len(matching_files) == 0:
+        log.info(f"No matching .xrif files for {device} found in any data root: {data_roots}")
+        return
     all_visited_files = load_file_history(history_path)
     log.debug(f"Loaded previously visited files: {all_visited_files}")
     new_matching_files = set(x for x in matching_files if x.path.name not in all_visited_files)
@@ -429,7 +430,7 @@ def do_quicklook_for_camera(
         for fn in sorted(new_matching_files, key=lambda x: x.timestamp):
             log.debug(f"\t{fn} (new)")
         successful_paths, failed_paths = convert_xrif(
-            image_path, data_roots, new_matching_files, destination, omit_telemetry, dry_run, cube_mode,
+            data_roots, new_matching_files, destination, omit_telemetry, dry_run, cube_mode,
             xrif2fits_cmd, executor, ignore_data_integrity
         )
         if not dry_run:
@@ -505,7 +506,7 @@ def launch_xrif2fits(args : list[str], telem_args : list[str], dry_run=False):
     return success, command_line
 
 def convert_xrif(
-    base_dir, data_roots: typing.List[pathlib.Path],
+    data_roots: typing.List[pathlib.Path],
     paths : typing.List[TimestampedFile], destination_path : pathlib.Path,
     omit_telemetry : bool, dry_run : bool, cube_mode : bool, xrif2fits_cmd: str,
     executor : futures.ThreadPoolExecutor, ignore_data_integrity : bool
@@ -521,7 +522,7 @@ def convert_xrif(
     for ts_path in paths:
         args = [
             xrif2fits_cmd,
-            '-d', str(base_dir),
+            '-d', ts_path.path.parent.as_posix(),
             '-f', ts_path.path.name,
             '-D', str(destination_path),
         ]
