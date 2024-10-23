@@ -481,6 +481,17 @@ def launch_xrif2fits(args : list[str], telem_args : list[str], dry_run=False):
         except subprocess.TimeoutExpired as e:
             log.error(f"xrif2fits canceled after {XRIF2FITS_TIMEOUT_SEC} sec timeout. Command was: {command_line}")
             proc.kill()
+            try:
+                proc = subprocess.Popen(
+                    args + telem_args,
+                )
+                proc.wait(timeout=XRIF2FITS_TIMEOUT_SEC)
+                success = proc.returncode == 0
+                if not success:
+                    log.error(f"Retry of xrif2fits with telem and stdout/stderr exited with nonzero exit code. Command was: {command_line}")
+            except subprocess.TimeoutExpired as e:
+                log.error(f"Retry of xrif2fits with telem and stdout/stderr canceled after {XRIF2FITS_TIMEOUT_SEC} sec timeout. Command was: {command_line}")
+                proc.kill()
             success = False
     else:
         success = True
@@ -488,7 +499,7 @@ def launch_xrif2fits(args : list[str], telem_args : list[str], dry_run=False):
     if len(telem_args) != 0 and not success:
         no_telem_success, no_telem_command_line = launch_xrif2fits(args, [], dry_run=dry_run)
         if no_telem_success:
-            log.error(f"Reprocessing without telemetry succeded. Original command: {command_line}, revised command: {no_telem_command_line}")
+            log.error(f"Reprocessing without telemetry succeeded. Original command: {command_line}, revised command: {no_telem_command_line}")
         else:
             log.error(f"Reprocessing without telemetry failed. Original command: {command_line}, revised command: {no_telem_command_line}")
     return success, command_line
