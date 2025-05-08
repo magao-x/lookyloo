@@ -32,6 +32,7 @@ def daemon_mode(
     ignore_data_integrity: bool,
     symlink_tree_dir: typing.Optional[pathlib.Path]=None,
     omit_telemetry : bool=False,
+    find_partial_archives: bool=False,
 ):
     existing_observation_spans = set()
     log.info(f"Started at {datetime.datetime.now().isoformat()}, looking for unprocessed observations since {start_dt}...")
@@ -56,6 +57,7 @@ def daemon_mode(
                     dry_run,
                     symlink_tree_dir=symlink_tree_dir,
                     ignore_data_integrity=ignore_data_integrity,
+                    find_partial_archives=find_partial_archives,
                 )
                 if span.end is not None:
                     spans_with_data.add(span)
@@ -82,6 +84,11 @@ def main():
     parser.add_argument('-j', '--parallel-jobs', default=8, help="Max number of parallel xrif2fits processes to launch (if the number of archives in an interval is smaller than this, fewer processes will be launched)")
     parser.add_argument('--ignore-data-integrity', help="[DEBUG USE ONLY]", action='store_true')
     parser.add_argument('--xrif2fits-cmd', default='xrif2fits', help="Specify a path to an alternative version of xrif2fits here if desired", action='store')
+    parser.add_argument(
+        "--find-partial-archives",
+        help="When recording starts after stream-writing, archives may be missed. This option finds the last prior archive and exports it as well.",
+        action="store_true",
+    )
 
     args = parser.parse_args()
     output_path = pathlib.Path(args.output_dir)
@@ -147,6 +154,7 @@ def main():
             dry_run=args.dry_run,
             ignore_data_integrity=args.ignore_data_integrity,
             symlink_tree_dir=args.symlink_tree_dir,
+            find_partial_archives=args.find_partial_archives,
         )
     finally:
         threadpool.shutdown()

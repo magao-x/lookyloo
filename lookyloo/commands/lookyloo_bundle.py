@@ -42,6 +42,11 @@ def main():
     parser.add_argument('-D', '--output-dir', help=f"output directory, defaults to current dir", action='store', default=os.getcwd())
     parser.add_argument('-j', '--parallel-jobs', default=8, help="Max number of parallel xrif2fits processes to launch (default: 8; if the number of archives in an interval is smaller than this, fewer processes will be launched)")
     parser.add_argument('--ignore-data-integrity', help="[DEBUG USE ONLY]", action='store_true')
+    parser.add_argument(
+        "--find-partial-archives",
+        help="When recording starts after stream-writing, archives may be missed. This option finds the last prior archive and exports it as well.",
+        action="store_true",
+    )
     args = parser.parse_args()
     output_path = pathlib.Path(args.output_dir)
     if not output_path.is_dir():
@@ -86,4 +91,5 @@ def main():
                     threadpool,
                     args.dry_run,
                     cameras,
+                    find_partial_archives=args.find_partial_archives,
                 )
