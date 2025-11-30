@@ -3,7 +3,7 @@ import os
 import re
 
 LOOKYLOO_DATA_ROOTS = os.environ.get('LOOKYLOO_DATA_PATHS', '/opt/MagAOX:/srv/icc/data:/srv/rtc/data')
-QUICKLOOK_PATH = pathlib.Path('/data/obs')
+QUICKLOOK_PATH = pathlib.Path('/home/guestobs/obs')
 LOG_PATH = pathlib.Path('/opt/MagAOX/logs/lookyloo')
 HISTORY_FILENAME = ".lookyloo_succeeded"
 FAILED_HISTORY_FILENAME = ".lookyloo_failed"

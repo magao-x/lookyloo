@@ -20,42 +20,45 @@ the current directory as well.
 
     lookyloo --output-dir . --year 2022 --verbose
 """
-import re
-import subprocess
-import pathlib
-import typing
-import dataclasses
-import os
-import time
-import datetime
-from datetime import timezone
-from concurrent import futures
-import logging
-import glob
-import tempfile
-from astropy.io import fits
-import shutil
-import orjson
 
-from .utils import parse_iso_datetime, format_timestamp_for_filename, utcnow
+import dataclasses
+import datetime
+import glob
+import itertools
+import logging
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import tempfile
+import time
+import typing
+from concurrent import futures
+from datetime import timezone
+
+import orjson
+from astropy.io import fits
+
 from .constants import (
-    PRETTY_MODIFIED_TIME_FORMAT,
-    LINE_FORMAT_REGEX,
+    ALL_CAMERAS,
+    CHECK_INTERVAL_SEC,
+    DEFAULT_CUBE,
+    DEFAULT_SEPARATE,
+    FAILED_HISTORY_FILENAME,
+    FOLDER_TIMESTAMP_FORMAT,
+    HISTORY_FILENAME,
     LINE_BUFFERED,
+    LINE_FORMAT_REGEX,
+    LOOKYLOO_DATA_ROOTS,
     MODIFIED_TIME_FORMAT,
     OBSERVERS_DEVICE,
-    HISTORY_FILENAME,
-    FAILED_HISTORY_FILENAME,
-    XRIF2FITS_TIMEOUT_SEC,
-    SLEEP_FOR_TELEMS,
-    ALL_CAMERAS,
-    DEFAULT_SEPARATE,
-    DEFAULT_CUBE,
-    CHECK_INTERVAL_SEC,
-    LOOKYLOO_DATA_ROOTS,
+    PRETTY_MODIFIED_TIME_FORMAT,
     QUICKLOOK_PATH,
-    FOLDER_TIMESTAMP_FORMAT,
+    SLEEP_FOR_TELEMS,
+    XRIF2FITS_TIMEOUT_SEC,
 )
+from .utils import format_timestamp_for_filename, parse_iso_datetime, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -80,14 +83,18 @@ class ObserverTelem:
     def __str__(self):
         return f"<ObserverTelem: {repr(self.tgt)} {repr(self.obs)} {self.email} at {self.ts.strftime(PRETTY_MODIFIED_TIME_FORMAT)} [{'on' if self.on else 'off'}]>"
 
+
 def parse_observers_line(line):
     rec = orjson.loads(line)
-    email = rec['msg']['email']
-    name = rec['msg']['obsName']
-    tgt = rec['msg'].get('tgt_name', '').strip()  # old records don't have this key, so use an empty string because it's falsey
-    observing = rec['msg']['observing']
-    ts = parse_iso_datetime(rec['ts'][:-3])
+    email = rec["msg"]["email"]
+    name = rec["msg"]["obsName"]
+    tgt = (
+        rec["msg"].get("tgt_name", "").strip()
+    )  # old records don't have this key, so use an empty string because it's falsey
+    observing = rec["msg"]["observing"]
+    ts = parse_iso_datetime(rec["ts"][:-3])
     return ObserverTelem(ts, email, name, observing, tgt)
+
 
 def parse_logdump_for_observers(
     telem_path: pathlib.Path,
@@ -206,12 +213,37 @@ def find_device_names_in_folder(
     return device_names
 
 
+def format_day_folder(dt):
+    return f"{dt.year}_{dt.month:02}_{dt.day:02}"
+
+
+def filter_day_folders(
+    base_path: pathlib.Path,
+    newer_than_dt: datetime.datetime,
+    older_than_dt: typing.Optional[datetime.datetime] = None,
+):
+    if older_than_dt is None:
+        older_than_dt = datetime.datetime.now(timezone.utc) + datetime.timedelta(
+            hours=1
+        )
+    older_than_ymd = older_than_dt.year, older_than_dt.month, older_than_dt.day
+    newer_than_ymd = (newer_than_dt.year, newer_than_dt.month, newer_than_dt.day)
+    day_folders = base_path.glob("*_*_*")
+    matching_day_folders: list[pathlib.Path] = []
+    for df in day_folders:
+        year, month, day = map(int, df.name.split("_"))
+        if newer_than_ymd <= (year, month, day) <= older_than_ymd:
+            matching_day_folders.append(df)
+
+    return matching_day_folders
+
+
 def get_matching_paths(
     base_path: pathlib.Path,
     device: str,
     extension: str,
     newer_than_dt: datetime.datetime,
-    older_than_dt: datetime.datetime = None,
+    older_than_dt: typing.Optional[datetime.datetime] = None,
     grab_one_before_start=False,
 ) -> typing.List[TimestampedFile]:
     newer_than_dt_fn = (
@@ -223,7 +255,16 @@ def get_matching_paths(
         )
     else:
         older_than_dt_fn = None
-    all_matching_files = list(sorted(base_path.glob(f"{device}_*.{extension}")))
+    log.debug(f"{base_path=} {newer_than_dt=} {older_than_dt=}")
+    folders_within_bounds = filter_day_folders(base_path, newer_than_dt, older_than_dt)
+    log.debug(f"{folders_within_bounds=}")
+    all_matching_files = list(
+        sorted(
+            itertools.chain(
+                *[fwb.glob(f"{device}_*.{extension}") for fwb in folders_within_bounds]
+            )
+        )
+    )
     n_files = len(all_matching_files)
     filtered_files = []
     log.debug(f"Interval endpoint filenames: {newer_than_dt_fn=} {older_than_dt_fn=}")
@@ -251,6 +292,32 @@ def get_matching_paths(
             filtered_files.append(path_to_timestamped_file(the_path))
     return filtered_files
 
+def events_by_walking_observers_telem(data_root: pathlib.Path, start_dt):
+    all_days = list(sorted(data_root.glob("*_*_*"), reverse=True))
+
+    bintel_contents = []
+    reached_before_start = False
+    for day in all_days:
+        if reached_before_start:
+            # we have found a telem archive that ends before our interval starts
+            break
+        all_telems = list(sorted(day.glob("*.bintel"), reverse=True))
+        for bintel in all_telems:
+            these_events = list(parse_logdump_for_observers(bintel))
+            first_telem, last_telem = these_events[0], these_events[-1]
+            if last_telem.ts >= start_dt:
+                # at least the end of the bintel archive was in our interval
+                bintel_contents.append(these_events)
+            else:
+                # because these telems are sorted, and the days are sorted,
+                # it's not worth visiting any more
+                reached_before_start = True
+                break
+    # We walked backwards, so make sure we reverse the contents before
+    # we concatenate
+    bintel_contents = bintel_contents[::-1]
+    events: list[ObserverTelem] = list(chain(*bintel_contents))
+    return events
 
 def get_observation_telems(
     data_roots: typing.List[pathlib.Path],
@@ -259,28 +326,22 @@ def get_observation_telems(
     ignore_data_integrity: bool,
 ):
     events = []
-    observers_data_root = None
+    found_one = False
     for data_root in data_roots:
-        obs_dev_path = data_root / "telem"
-        log.debug(f"Scanning {obs_dev_path} for {OBSERVERS_DEVICE} telems")
-        if len(list(obs_dev_path.glob(f"{OBSERVERS_DEVICE}_*.bintel"))):
-            observers_data_root = obs_dev_path
-            break
-    if observers_data_root is None:
+        obs_dev_path = data_root / "telem" / OBSERVERS_DEVICE
+        log.debug(f"Checking {obs_dev_path} for {OBSERVERS_DEVICE} telems")
+        if not obs_dev_path.exists():
+            log.debug(f"No {OBSERVERS_DEVICE} telem in {obs_dev_path}")
+            continue
+        found_one = True
+        log.debug(f"{obs_dev_path} exists!")
+        observers_data_root = obs_dev_path
+        events = events_by_walking_observers_telem(observers_data_root, start_dt)
+    if not found_one:
         raise RuntimeError(
-            f"No {OBSERVERS_DEVICE} device telemetry in any of {[(x / 'telem').as_posix() for x in data_roots]}"
+            f"No {OBSERVERS_DEVICE} device telemetry in any of {data_roots}"
         )
-    for telem_path in get_matching_paths(
-        observers_data_root,
-        OBSERVERS_DEVICE,
-        "bintel",
-        start_dt,
-        end_dt,
-        grab_one_before_start=True,
-    ):
-        events.extend(
-            parse_logdump_for_observers(telem_path.path, ignore_data_integrity)
-        )
+
     return events
 
 
@@ -290,9 +351,9 @@ def transform_telems_to_spans(
     end_dt: typing.Optional[datetime.datetime] = None,
 ):
     spans = []
-    current_observer_email: str = None
-    current_observation: str = None
-    current_observation_start: datetime.datetime = None
+    current_observer_email: typing.Optional[str] = None
+    current_observation: typing.Optional[str] = None
+    current_observation_start: typing.Optional[datetime.datetime] = None
 
     def _add_span(email, title, begin, end, tgt):
         if end is not None and end_dt is not None and end > end_dt:
@@ -337,7 +398,11 @@ def transform_telems_to_spans(
     if current_observation_start is not None:
         # last event was 'on' and the span is an open interval
         _add_span(
-            current_observer_email, current_observation, current_observation_start, None, event.tgt
+            current_observer_email,
+            current_observation,
+            current_observation_start,
+            None,
+            event.tgt,
         )
     return spans, start_dt
 
@@ -348,7 +413,7 @@ def get_new_observation_spans(
     start_dt: datetime.datetime,
     end_dt: typing.Optional[datetime.datetime] = None,
     ignore_data_integrity: bool = False,
-) -> tuple[set[ObservationSpan, datetime.datetime]]:
+) -> tuple[set[ObservationSpan], datetime.datetime]:
     events = get_observation_telems(data_roots, start_dt, end_dt, ignore_data_integrity)
     spans, start_dt = transform_telems_to_spans(events, start_dt, end_dt)
     if len(spans):
@@ -445,7 +510,7 @@ def do_quicklook_for_camera(
     dry_run,
     cube_mode,
     executor: futures.ThreadPoolExecutor,
-    symlink_tree_dir: pathlib.Path = None,
+    symlink_tree_dir: typing.Optional[pathlib.Path] = None,
     all_visited_files=None,
     xrif2fits_cmd="xrif2fits",
     ignore_history=False,
@@ -523,9 +588,12 @@ def do_quicklook_for_camera(
             log.debug("dry run: prune files outside the span")
             kept_output_files = []
         if len(kept_output_files) and symlink_tree_dir is not None and not dry_run:
-            catalog_name = span.tgt if span.tgt else catalog_name_from_outputs(kept_output_files)
+            catalog_name = (
+                span.tgt if span.tgt else catalog_name_from_outputs(kept_output_files)
+            )
             # stupid sanitization to avoid stupid problems:
-            catalog_name = catalog_name.replace('/', '-')
+            catalog_name = catalog_name.replace("/", "-")
+            catalog_name = catalog_name.replace("/", "-")
             # ... / a@b.edu / 2022B / Sirius / 2022-02-02_020304_label -> (../../../../2022B/a@b.edu/2022-02-02_020304_label)
             friendly_observer_semester_prefix = (
                 symlink_tree_dir / email / semester / catalog_name / night / title
@@ -782,6 +850,7 @@ def _check_in_span(
     args: typing.List[str], span: ObservationSpan, partial_overlap_ok: bool = True
 ):
     """Check whether a given archive lies in the ObservationSpan"""
+    out = None
     try:
         out = (
             subprocess.check_output(args, stderr=subprocess.DEVNULL)
