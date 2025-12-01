@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import sys
 import typing
 from concurrent import futures
 from datetime import timezone
@@ -116,8 +117,9 @@ def parse_logdump_for_observers(
             continue
         try:
             this_telem = parse_observers_line(line)
-        except Exception as e:
+        except Exception:
             log.exception("Unparseable line running command " + " ".join(args))
+            continue
 
         if last_telem is None:
             last_telem = this_telem
@@ -130,6 +132,7 @@ def parse_logdump_for_observers(
         ):
             last_telem = this_telem
             yield this_telem
+
         returncode = p1.poll()
         if (returncode is not None and returncode != 0) and not ignore_data_integrity:
             raise RuntimeError(
@@ -304,6 +307,9 @@ def events_by_walking_observers_telem(data_root: pathlib.Path, start_dt):
         all_telems = list(sorted(day.glob("*.bintel"), reverse=True))
         for bintel in all_telems:
             these_events = list(parse_logdump_for_observers(bintel))
+            if len(these_events) == 0:
+                # sometimes there are no edge events for a whole bintel (e.g. restarts mid obs)
+                continue
             first_telem, last_telem = these_events[0], these_events[-1]
             if last_telem.ts >= start_dt:
                 # at least the end of the bintel archive was in our interval
@@ -316,7 +322,7 @@ def events_by_walking_observers_telem(data_root: pathlib.Path, start_dt):
     # We walked backwards, so make sure we reverse the contents before
     # we concatenate
     bintel_contents = bintel_contents[::-1]
-    events: list[ObserverTelem] = list(chain(*bintel_contents))
+    events: list[ObserverTelem] = list(itertools.chain(*bintel_contents))
     return events
 
 def get_observation_telems(
@@ -337,6 +343,7 @@ def get_observation_telems(
         log.debug(f"{obs_dev_path} exists!")
         observers_data_root = obs_dev_path
         events = events_by_walking_observers_telem(observers_data_root, start_dt)
+        log.debug(f"{len(events)=}")
     if not found_one:
         raise RuntimeError(
             f"No {OBSERVERS_DEVICE} device telemetry in any of {data_roots}"
@@ -636,6 +643,7 @@ def do_quicklook_for_camera(
 
 def launch_xrif2fits(args: list[str], telem_args: list[str], dry_run=False):
     command_line = " ".join(args + telem_args)
+    proc = None
     if not dry_run:
         log.debug(f"Launching: {command_line}")
         try:
@@ -652,7 +660,8 @@ def launch_xrif2fits(args: list[str], telem_args: list[str], dry_run=False):
             log.error(
                 f"xrif2fits canceled after {XRIF2FITS_TIMEOUT_SEC} sec timeout. Command was: {command_line}"
             )
-            proc.kill()
+            if proc is not None:
+                proc.kill()
             try:
                 proc = subprocess.Popen(
                     args + telem_args,
@@ -667,14 +676,15 @@ def launch_xrif2fits(args: list[str], telem_args: list[str], dry_run=False):
                 log.error(
                     f"Retry of xrif2fits with telem and stdout/stderr canceled after {XRIF2FITS_TIMEOUT_SEC} sec timeout. Command was: {command_line}"
                 )
-                proc.kill()
+                if proc is not None:
+                    proc.kill()
             success = False
     else:
         success = True
         log.debug(f"dry run: {command_line}")
     if len(telem_args) != 0 and not success:
         no_telem_success, no_telem_command_line = launch_xrif2fits(
-            args, [], dry_run=dry_run
+            args, ['-N'], dry_run=dry_run
         )
         if no_telem_success:
             log.error(
@@ -712,6 +722,7 @@ def convert_xrif(
     for ts_path in paths:
         args = [
             xrif2fits_cmd,
+            "-O",  # overwrite if dir is present (i.e. previous failed export)
             "-d",
             ts_path.path.parent.as_posix(),
             "-f",
