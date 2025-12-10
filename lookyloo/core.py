@@ -16,7 +16,7 @@ using a backup drive copy of the AOC/RTC/ICC data partitions.
 Example: Convert camsci1 and camsci2 (the defaults) archives from any
 observation in 2022 and record verbose output from lookyloo itself
 to a log file in the current directory, saving outputs to folders in
-the current directory as well.
+the current directory as well.x
 
     lookyloo --output-dir . --year 2022 --verbose
 """
@@ -425,7 +425,7 @@ def get_new_observation_spans(
     spans, start_dt = transform_telems_to_spans(events, start_dt, end_dt)
     if len(spans):
         new_observation_spans = set(spans) - existing_observation_spans
-        log.debug(f"New observation_spans: {new_observation_spans}")
+        # log.debug(f"New observation_spans: {new_observation_spans}")
         return new_observation_spans, start_dt
     else:
         return set(), start_dt
@@ -517,7 +517,6 @@ def do_quicklook_for_camera(
     dry_run,
     cube_mode,
     executor: futures.ThreadPoolExecutor,
-    symlink_tree_dir: typing.Optional[pathlib.Path] = None,
     all_visited_files=None,
     xrif2fits_cmd="xrif2fits",
     ignore_history=False,
@@ -594,34 +593,7 @@ def do_quicklook_for_camera(
         else:
             log.debug("dry run: prune files outside the span")
             kept_output_files = []
-        if len(kept_output_files) and symlink_tree_dir is not None and not dry_run:
-            catalog_name = (
-                span.tgt if span.tgt else catalog_name_from_outputs(kept_output_files)
-            )
-            # stupid sanitization to avoid stupid problems:
-            catalog_name = catalog_name.replace("/", "-")
-            catalog_name = catalog_name.replace("/", "-")
-            # ... / a@b.edu / 2022B / Sirius / 2022-02-02_020304_label -> (../../../../2022B/a@b.edu/2022-02-02_020304_label)
-            friendly_observer_semester_prefix = (
-                symlink_tree_dir / email / semester / catalog_name / night / title
-            )
-            friendly_observer_semester_prefix.parent.mkdir(parents=True, exist_ok=True)
-            if not friendly_observer_semester_prefix.is_symlink():
-                relpath_to_simple_destination = os.path.relpath(
-                    simple_observer_prefix,
-                    start=friendly_observer_semester_prefix.parent,
-                )
-                log.debug(
-                    f"Making link at {friendly_observer_semester_prefix} pointing to {relpath_to_simple_destination}"
-                )
-                try:
-                    friendly_observer_semester_prefix.symlink_to(
-                        relpath_to_simple_destination
-                    )
-                except OSError as e:
-                    log.exception(
-                        f"Could not make a symbolic link at {friendly_observer_semester_prefix} pointing to {relpath_to_simple_destination} (unsupported by destination filesystem, maybe?)"
-                    )
+
         for archive_path in successful_paths:
             log.info(f"Converted {archive_path}")
         for archive_path in failed_paths:
@@ -758,7 +730,7 @@ def convert_xrif(
             successful_paths.append(ts_path.path)
 
     if len(failed_commands):
-        log.debug(f"failed commands:")
+        log.debug("failed commands:")
         for cmd in failed_commands:
             log.debug(f"\tfailed: {cmd}")
     log.debug(f"Extracted {len(paths)} XRIF archives to FITS")
@@ -780,7 +752,12 @@ def decide_to_process(args, span):
     else:
         observer_match = True
 
-    return title_match and observer_match
+    if args.object is not None:
+        object_match = span.tgt.strip().lower() == args.object.strip().lower()
+    else:
+        object_match = True
+
+    return title_match and observer_match and object_match
 
 
 def process_span(
@@ -795,7 +772,6 @@ def process_span(
     executor: futures.ThreadPoolExecutor,
     dry_run: bool,
     force_cube_or_separate: typing.Optional[object] = None,
-    symlink_tree_dir: pathlib.Path = None,
     ignore_data_integrity: bool = False,
     find_partial_archives: bool = False,
 ):
@@ -815,7 +791,6 @@ def process_span(
             dry_run,
             cube_mode,
             executor=executor,
-            symlink_tree_dir=symlink_tree_dir,
             all_visited_files=all_visited_files,
             xrif2fits_cmd=xrif2fits_cmd,
             ignore_history=ignore_history,

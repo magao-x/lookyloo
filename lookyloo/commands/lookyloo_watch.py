@@ -22,7 +22,6 @@ log = logging.getLogger('lookyloo')
 def daemon_mode(
     output_dir : pathlib.Path, cameras : typing.List[str],
     data_roots: typing.List[pathlib.Path],
-    construct_symlink_tree: bool,
     xrif2fits_cmd: str,
     start_dt: datetime.datetime,
     all_visited_files: typing.List[TimestampedFile],
@@ -55,7 +54,6 @@ def daemon_mode(
                     ignore_history,
                     executor,
                     dry_run,
-                    symlink_tree_dir=symlink_tree_dir,
                     ignore_data_integrity=ignore_data_integrity,
                     find_partial_archives=find_partial_archives,
                 )
@@ -95,14 +93,6 @@ def main():
     if not output_path.is_dir():
         output_path.mkdir(parents=True, exist_ok=True)
 
-    if args.symlink_tree_dir is None:
-        symlink_tree_dir = output_path
-    else:
-        symlink_tree_dir = pathlib.Path(args.symlink_tree_dir)
-    log.debug(f"Creating a tree of symbolic links in {symlink_tree_dir} to organize outputs")
-    if not symlink_tree_dir.is_dir():
-        symlink_tree_dir.mkdir(parents=True, exist_ok=True)
-
     if not os.path.isdir(args.log_dir):
         os.makedirs(args.log_dir, exist_ok=True)
     log_file_path = f"{args.log_dir}/lookyloo_{time.time()}.log" if args.verbose or args.dry_run else None
@@ -138,14 +128,12 @@ def main():
     semester_start_dt = semester_start_dt.replace(tzinfo=timezone.utc)
     start_dt = semester_start_dt
     threadpool = futures.ThreadPoolExecutor(max_workers=args.parallel_jobs)
-    construct_symlink_tree = True
 
     try:
         daemon_mode(
             output_dir,
             cameras,
             data_roots,
-            construct_symlink_tree,
             args.xrif2fits_cmd,
             start_dt,
             all_processed_files,
@@ -153,7 +141,6 @@ def main():
             executor=threadpool,
             dry_run=args.dry_run,
             ignore_data_integrity=args.ignore_data_integrity,
-            symlink_tree_dir=args.symlink_tree_dir,
             find_partial_archives=args.find_partial_archives,
         )
     finally:

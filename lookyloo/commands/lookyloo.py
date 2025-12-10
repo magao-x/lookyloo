@@ -1,35 +1,35 @@
+import argparse
+import datetime
+import logging
 import os
 import os.path
-import datetime
 import pathlib
-import logging
-import argparse
 import time
 import typing
-from datetime import timezone
 from concurrent import futures
+from datetime import timezone
 
 from ..constants import (
-    HISTORY_FILENAME,
     ALL_CAMERAS,
     AUTO_EXPORT_CAMERAS,
-    LOOKYLOO_DATA_ROOTS,
-    QUICKLOOK_PATH,
+    CHECK_INTERVAL_SEC,
     DEFAULT_CUBE,
     DEFAULT_SEPARATE,
-    CHECK_INTERVAL_SEC,
+    HISTORY_FILENAME,
     LOG_PATH,
+    LOOKYLOO_DATA_ROOTS,
+    QUICKLOOK_PATH,
 )
-from ..utils import parse_iso_datetime, utcnow, format_timestamp_for_filename
 from ..core import (
-    TimestampedFile,
     ObservationSpan,
-    load_file_history,
+    TimestampedFile,
+    decide_to_process,
     do_quicklook_for_camera,
     get_new_observation_spans,
+    load_file_history,
     process_span,
-    decide_to_process,
 )
+from ..utils import format_timestamp_for_filename, parse_iso_datetime, utcnow
 
 log = logging.getLogger("lookyloo")
 
@@ -70,6 +70,9 @@ def main():
         "-t", "--title", help="Title of observation to collect", action="store"
     )
     parser.add_argument(
+        "-o", "--object", help="Object name", action="store"
+    )
+    parser.add_argument(
         "-e",
         "--observer-email",
         help="Skip observations that are not by this observer (matches substrings, case-independent)",
@@ -86,7 +89,6 @@ def main():
         help="When recording starts after stream-writing, archives may be missed. This option finds the last prior archive and exports it as well.",
         action="store_true",
     )
-
     parser.add_argument(
         "-s",
         "--semester",
@@ -95,12 +97,12 @@ def main():
     )
     parser.add_argument(
         "--utc-start",
-        help=f"ISO UTC datetime stamp of earliest observation start time to process (supersedes --semester)",
+        help="ISO UTC datetime stamp of earliest observation start time to process (supersedes --semester)",
         type=parse_iso_datetime,
     )
     parser.add_argument(
         "--utc-end",
-        help=f"ISO UTC datetime stamp of latest observation end time to process (ignored in daemon mode)",
+        help="ISO UTC datetime stamp of latest observation end time to process (ignored in daemon mode)",
         type=parse_iso_datetime,
     )
 
@@ -126,17 +128,6 @@ def main():
         "--ignore-data-integrity", help="[DEBUG USE ONLY]", action="store_true"
     )
     parser.add_argument(
-        "-T",
-        "--omit-symlink-tree",
-        help="Whether to skip constructing the parallel structure of symlinks organizing observations by observer",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--symlink-tree-dir",
-        default=None,
-        help="Root directory to construct symlink tree in (paths will have the form <symlink_tree_dir>/2023A/...), defaults to same as output dir",
-    )
-    parser.add_argument(
         "-D",
         "--output-dir",
         help=f"output directory, defaults to current dir",
@@ -160,20 +151,6 @@ def main():
     output_path = pathlib.Path(args.output_dir)
     if not output_path.is_dir():
         output_path.mkdir(parents=True, exist_ok=True)
-
-    if args.omit_symlink_tree:
-        symlink_tree_dir = None
-        log.debug("Omitting construction of symbolic link structure")
-    else:
-        if args.symlink_tree_dir is None:
-            symlink_tree_dir = output_path
-        else:
-            symlink_tree_dir = pathlib.Path(args.symlink_tree_dir)
-        log.debug(
-            f"Creating a tree of symbolic links in {symlink_tree_dir} to organize outputs"
-        )
-    if symlink_tree_dir is not None and not symlink_tree_dir.is_dir():
-        symlink_tree_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp_str = format_timestamp_for_filename(utcnow())
     log_file_path = (
@@ -271,7 +248,6 @@ def main():
                     args.ignore_history,
                     threadpool,
                     args.dry_run,
-                    symlink_tree_dir=symlink_tree_dir,
                     force_cube_or_separate=force_mode,
                     ignore_data_integrity=args.ignore_data_integrity,
                     find_partial_archives=args.find_partial_archives,
