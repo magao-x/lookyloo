@@ -756,8 +756,12 @@ def decide_to_process(args, span):
         object_match = span.tgt.strip().lower() == args.object.strip().lower()
     else:
         object_match = True
-
-    return title_match and observer_match and object_match
+    should_process = title_match and observer_match and object_match
+    if should_process:
+        log.info(f"Span to process: {span}")
+    else:
+        log.debug(f"Span does not match constraints: {span} ({title_match=}, {observer_match=}, {object_match=})")
+    return should_process
 
 
 def process_span(

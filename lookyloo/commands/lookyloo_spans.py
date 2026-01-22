@@ -81,4 +81,4 @@ def main():
                 should_display = False
 
         if should_display:
-            print(f"{start_ts}\t{end_ts}\t{repr(obs.email)}\t{repr(obs.title)}")
+            print(f"{start_ts}\t{end_ts}\t{repr(obs.email)}\t{repr(obs.tgt)}\t{repr(obs.title)}")

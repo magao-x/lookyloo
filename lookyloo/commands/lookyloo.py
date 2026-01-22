@@ -236,7 +236,6 @@ def main():
     with futures.ThreadPoolExecutor(max_workers=args.parallel_jobs) as threadpool:
         for _, span in spans_by_begin_dt:
             if decide_to_process(args, span):
-                log.info(f"Observation interval to process: {span}")
                 process_span(
                     span,
                     output_dir,
