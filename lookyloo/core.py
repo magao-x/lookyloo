@@ -130,8 +130,21 @@ def parse_logdump_for_observers(
             or this_telem.obs != last_telem.obs
             or this_telem.on != last_telem.on
         ):
+            # when this is a 'rising edge' (last_telem.on is False, this_telem.on is True)
+            # we should yield a telem with the timestamp of the start of the edge
+            if this_telem.on and not last_telem.on:
+                out_telem = ObserverTelem(
+                    last_telem.ts,
+                    this_telem.email,
+                    this_telem.obs,
+                    this_telem.on,
+                    this_telem.tgt,
+                )
+            else:
+                out_telem = this_telem
+
             last_telem = this_telem
-            yield this_telem
+            yield out_telem
 
         returncode = p1.poll()
         if (returncode is not None and returncode != 0) and not ignore_data_integrity:
@@ -163,9 +176,8 @@ def xfilename_to_utc_timestamp(filename):
     _, filename = os.path.split(filename)
     name, ext = os.path.splitext(filename)
     chopped_ts_str = name.rsplit("_", 1)[1]
-    chopped_ts_str = chopped_ts_str[
-        :-3
-    ]  # nanoseconds are too precise for Python's native datetimes
+    # nanoseconds are too precise for Python's native datetimes
+    chopped_ts_str = chopped_ts_str[:-3]
     ts = datetime.datetime.strptime(chopped_ts_str, MODIFIED_TIME_FORMAT).replace(
         tzinfo=timezone.utc
     )
@@ -261,16 +273,13 @@ def get_matching_paths(
         )
     else:
         older_than_dt_fn = None
-    log.debug(f"{base_path=} {newer_than_dt=} {older_than_dt=}")
     folders_within_bounds = filter_day_folders(base_path, newer_than_dt, older_than_dt)
-    log.debug(f"{folders_within_bounds=}")
     all_matching_files = list(
-        sorted(
-            itertools.chain(
-                *[fwb.glob(f"{device}_*.{extension}") for fwb in folders_within_bounds]
-            )
+        itertools.chain(
+            *[fwb.glob(f"{device}_*.{extension}") for fwb in folders_within_bounds]
         )
     )
+    all_matching_files.sort()
     n_files = len(all_matching_files)
     filtered_files = []
     log.debug(f"Interval endpoint filenames: {newer_than_dt_fn=} {older_than_dt_fn=}")
@@ -288,15 +297,25 @@ def get_matching_paths(
             or (idx == n_files - 1)
         ):
             if not grab_one_before_start and the_path.name < newer_than_dt_fn:
-                # can't find any in-range entries from files that were opened before this
-                # span started (assuming files start writing after spans begin, grab_one_before_start==False) so skip
+                log.debug(f"{the_path.name=} < {newer_than_dt_fn=}")
+                log.debug(
+                    "can't find any in-range entries from files that were opened before this span started (assuming files start writing after spans begin, grab_one_before_start==False) so skip"
+                )
                 continue
-            if older_than_dt is not None and the_path.name > older_than_dt_fn:
-                # can't find in-range entries from files opened after `older_than_dt`
-                # so skip
-                continue
-            filtered_files.append(path_to_timestamped_file(the_path))
+            elif older_than_dt is not None and the_path.name > older_than_dt_fn:
+                log.debug(
+                    f"\nthis=\t{the_path.name}\nold=\t{older_than_dt_fn}\n{(the_path.name > older_than_dt_fn)=}"
+                )
+                log.debug(
+                    "since the list is sorted, that means we're not going to find any more in-range"
+                )
+                break
+            else:
+                tsf = path_to_timestamped_file(the_path)
+                filtered_files.append(tsf)
+    log.debug(f"Found {len(filtered_files)=}")
     return filtered_files
+
 
 def events_by_walking_observers_telem(data_root: pathlib.Path, start_dt):
     all_days = list(sorted(data_root.glob("*_*_*"), reverse=True))
@@ -328,6 +347,7 @@ def events_by_walking_observers_telem(data_root: pathlib.Path, start_dt):
     bintel_contents = bintel_contents[::-1]
     events: list[ObserverTelem] = list(itertools.chain(*bintel_contents))
     return events
+
 
 def get_observation_telems(
     data_roots: typing.List[pathlib.Path],
@@ -396,7 +416,9 @@ def transform_telems_to_spans(
             current_observation = event.obs
             current_observation_start = event.ts
             current_tgt = event.tgt
-            log.debug(f"Began span {current_observer_email=} {current_observation=} {current_observation_start=} {current_tgt=}")
+            log.debug(
+                f"Began span {current_observer_email=} {current_observation=} {current_observation_start=} {current_tgt=}"
+            )
         elif not event.on and current_observation is not None:
             _add_span(
                 current_observer_email,
@@ -405,7 +427,9 @@ def transform_telems_to_spans(
                 event.ts,
                 current_tgt,
             )
-            current_observation = current_observation_start = current_observer_email = current_tgt = None
+            current_observation = current_observation_start = current_observer_email = (
+                current_tgt
+            ) = None
 
     # new starting point for next iteration, ignore anything that we already processed
     if len(spans):
@@ -665,7 +689,7 @@ def launch_xrif2fits(args: list[str], telem_args: list[str], dry_run=False):
         log.debug(f"dry run: {command_line}")
     if len(telem_args) != 0 and not success:
         no_telem_success, no_telem_command_line = launch_xrif2fits(
-            args, ['-N'], dry_run=dry_run
+            args, ["-N"], dry_run=dry_run
         )
         if no_telem_success:
             log.error(
@@ -769,7 +793,9 @@ def decide_to_process(args, span):
     if should_process:
         log.info(f"Span to process: {span}")
     else:
-        log.debug(f"Span does not match constraints: {span} ({title_match=}, {observer_match=}, {object_match=})")
+        log.debug(
+            f"Span does not match constraints: {span} ({title_match=}, {observer_match=}, {object_match=})"
+        )
     return should_process
 
 
@@ -837,11 +863,18 @@ def stage_for_bundling(
     threadpool: futures.ThreadPoolExecutor,
 ) -> typing.List[pathlib.Path]:
     copy_tasks = []
+    log.debug(f"{len(data_files)=}")
+    container_dirs = set()
     for fn in data_files:
         relpath = fn.path.relative_to(data_root)
         dest = bundle_root / relpath
+        if dest.parent not in container_dirs and not dest.parent.is_dir():
+            dest.parent.mkdir(exist_ok=True)
+        container_dirs.add(dest.parent)
+        log.debug(f"Launching copy task {fn.path=}, {dest=}, {dry_run=}")
         copy_tasks.append(threadpool.submit(_copy_task, fn.path, dest, dry_run))
-    dest_paths = [dst for dst in futures.as_completed(copy_tasks)]
+    dest_paths = [dst.result() for dst in futures.as_completed(copy_tasks)]
+    log.debug(f"{dest_paths=}")
     return dest_paths
 
 
@@ -958,7 +991,8 @@ def create_bundle_from_span(
     for data_root in data_roots:
         # collect logs
         logs_root = data_root / "logs"
-        for devname in find_device_names_in_folder(logs_root, "binlog"):
+        device_names = [x.name for x in logs_root.glob("*")]
+        for devname in device_names:
             log_files = get_matching_paths(
                 logs_root,
                 device=devname,
@@ -972,6 +1006,7 @@ def create_bundle_from_span(
             elif not check_log_in_span(span, log_files[0]):
                 # drop first file if it was grabbed by optimistic matching for pre-interval-start frames
                 log_files = log_files[1:]
+            log.debug(f"{len(log_files)=} for {data_root}")
             bundle_contents.extend(
                 stage_for_bundling(
                     data_root,
@@ -983,7 +1018,8 @@ def create_bundle_from_span(
             )
         # collect telems
         telem_root = data_root / "telem"
-        for devname in find_device_names_in_folder(telem_root, "bintel"):
+        device_names = [x.name for x in telem_root.glob("*")]
+        for devname in device_names:
             telem_files = get_matching_paths(
                 telem_root,
                 device=devname,
@@ -992,11 +1028,13 @@ def create_bundle_from_span(
                 older_than_dt=span.end,
                 grab_one_before_start=True,
             )
+            log.debug(f"{len(telem_files)=} for {devname} in {data_root}")
             if not len(telem_files):
                 continue
             elif not check_telem_in_span(span, telem_files[0]):
                 # drop first file if it was grabbed by optimistic matching for pre-interval-start frames
                 telem_files = telem_files[1:]
+            log.debug(f"{len(telem_files)=} for {data_root}")
             bundle_contents.extend(
                 stage_for_bundling(
                     data_root,
