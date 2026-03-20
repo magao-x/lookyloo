@@ -234,7 +234,10 @@ def filter_day_folders(
     day_folders = base_path.glob("*_*_*")
     matching_day_folders: list[pathlib.Path] = []
     for df in day_folders:
-        year, month, day = map(int, df.name.split("_"))
+        try:
+            year, month, day = map(int, df.name.split("_"))
+        except ValueError:
+            continue  # wasn't a date folder at all
         if newer_than_ymd <= (year, month, day) <= older_than_ymd:
             matching_day_folders.append(df)
 

@@ -32,6 +32,9 @@ def main():
     parser.add_argument('-r', '--dry-run', help="Commands to run are printed in debug output (implies --verbose)", action='store_true')
     parser.add_argument('-v', '--verbose', help="Turn on debug output", action='store_true')
     parser.add_argument('-t', '--title', help="Title of observation to collect", action='store')
+    parser.add_argument(
+        "-o", "--object", help="Object name", action="store"
+    )
     parser.add_argument('-e', '--observer-email', help="Skip observations that are not by this observer (matches substrings, case-independent)", action='store')
     parser.add_argument('-p', '--partial-match-ok', help="A partial match (title provided is found anywhere in recorded title) is processed", action='store_true')
     parser.add_argument('-s', '--semester', help=f"Semester to search in, default: {this_semester}", default=this_semester)
