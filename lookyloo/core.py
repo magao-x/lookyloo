@@ -306,6 +306,7 @@ def events_by_walking_observers_telem(data_root: pathlib.Path, start_dt):
             break
         all_telems = list(sorted(day.glob("*.bintel"), reverse=True))
         for bintel in all_telems:
+            log.debug(f"Parsing {bintel} for events")
             these_events = list(parse_logdump_for_observers(bintel))
             if len(these_events) == 0:
                 # sometimes there are no edge events for a whole bintel (e.g. restarts mid obs)
@@ -361,6 +362,7 @@ def transform_telems_to_spans(
     current_observer_email: typing.Optional[str] = None
     current_observation: typing.Optional[str] = None
     current_observation_start: typing.Optional[datetime.datetime] = None
+    current_tgt: typing.Optional[str] = None
 
     def _add_span(email, title, begin, end, tgt):
         if end is not None and end_dt is not None and end > end_dt:
@@ -369,6 +371,11 @@ def transform_telems_to_spans(
             return
         spans.append(ObservationSpan(email, title, tgt, begin, end))
 
+    # n.b. events has already been pruned to just a sequence of _changes_
+    # (in telem values other than timestamp), so we expect that usually
+    # an 'off'->'on' transition will be followed by an event where event.on is False.
+    # However, when something *other* than that flag changes, we'll get two "ons" in a row,
+    # and should treat that as an observation boundary too
     for event in events:
         if event.on:
             if current_observation_start is not None:
@@ -380,23 +387,22 @@ def transform_telems_to_spans(
                     current_observation,
                     current_observation_start,
                     event.ts,
-                    event.tgt,
+                    current_tgt,
                 )
             current_observer_email = event.email
             current_observation = event.obs
             current_observation_start = event.ts
-            # log.debug(f"Began span {current_observer_email} {current_observation} {event.ts}")
+            current_tgt = event.tgt
+            log.debug(f"Began span {current_observer_email=} {current_observation=} {current_observation_start=} {current_tgt=}")
         elif not event.on and current_observation is not None:
             _add_span(
                 current_observer_email,
                 current_observation,
                 current_observation_start,
                 event.ts,
-                event.tgt,
+                current_tgt,
             )
-            current_observation = current_observation_start = current_observer_email = (
-                None
-            )
+            current_observation = current_observation_start = current_observer_email = current_tgt = None
 
     # new starting point for next iteration, ignore anything that we already processed
     if len(spans):
