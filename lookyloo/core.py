@@ -38,8 +38,10 @@ import typing
 from concurrent import futures
 from datetime import timezone
 
-import orjson
 from astropy.io import fits
+import fixr
+import numpy as np
+import orjson
 
 from .constants import (
     ALL_CAMERAS,
@@ -896,29 +898,24 @@ def _check_in_span(
 
 def check_xrif_in_span(
     span: ObservationSpan,
-    data_roots: typing.List[pathlib.Path],
     xrif_file: TimestampedFile,
 ):
-    """Use the --time mode of xrif2fits to check whether a given archive lies in the ObservationSpan"""
-    args = [
-        "/usr/local/bin/xrif2fits",
-        "--time",
-        "-d",
-        str(xrif_file.path.parent),
-        "-f",
-        xrif_file.path.name,
-    ]
-    telem_paths_str = ",".join((x / "telem").as_posix() for x in data_roots)
-    log_paths_str = ",".join((x / "logs").as_posix() for x in data_roots)
-    args.extend(
-        [
-            "-t",
-            telem_paths_str,
-            "-l",
-            log_paths_str,
-        ]
-    )
-    return _check_in_span(args, span)
+    '''Use fixr to read the timing info and determine whether the xrif overlaps
+    the ObservationSpan
+    '''
+    with xrif_file.path.open('rb') as fh:
+        timings : np.ndarray = fixr.read_streamwriter_timings(fh)
+        # layout of each row: [frame number, acqsec, acqnsec, wrtsec, wrtnsec]
+        first_frame = datetime.datetime.fromtimestamp(timings[0, 1] + timings[0, 2] / 1e9, tz=timezone.utc)
+        last_frame = datetime.datetime.fromtimestamp(timings[-1, 1] + timings[-1, 2] / 1e9, tz=timezone.utc)
+
+        # only two ways to not overlap
+        # {arch       }    [span           ]
+        # [span           ]    {arch       }
+        if span.begin > last_frame or (span.end is not None and first_frame > span.end):
+            return False
+    # all other arrangements overlap at least some
+    return True
 
 
 def check_log_in_span(span: ObservationSpan, log_file: TimestampedFile):

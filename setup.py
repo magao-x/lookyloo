@@ -29,6 +29,7 @@ setup(
     install_requires=[
         'astropy>=5.1',
         'orjson',
+        'fixr>=0.2.3'
     ],
     package_data={  # Optional
         PROJECT: ['VERSION'],
