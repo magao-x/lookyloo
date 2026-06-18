@@ -656,7 +656,7 @@ def launch_xrif2fits(args: list[str], telem_args: list[str], dry_run=False):
                 args + telem_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             proc.wait(timeout=XRIF2FITS_TIMEOUT_SEC)
-            success = proc.returncode == 0
+            success = proc.returncode in (0, 1)  # 0 - perfect, 1 - missing telem
             if not success:
                 log.error(
                     f"xrif2fits exited with nonzero exit code. Command was: {command_line}"
@@ -667,22 +667,6 @@ def launch_xrif2fits(args: list[str], telem_args: list[str], dry_run=False):
             )
             if proc is not None:
                 proc.kill()
-            try:
-                proc = subprocess.Popen(
-                    args + telem_args,
-                )
-                proc.wait(timeout=XRIF2FITS_TIMEOUT_SEC)
-                success = proc.returncode == 0
-                if not success:
-                    log.error(
-                        f"Retry of xrif2fits with telem and stdout/stderr exited with nonzero exit code. Command was: {command_line}"
-                    )
-            except subprocess.TimeoutExpired as e:
-                log.error(
-                    f"Retry of xrif2fits with telem and stdout/stderr canceled after {XRIF2FITS_TIMEOUT_SEC} sec timeout. Command was: {command_line}"
-                )
-                if proc is not None:
-                    proc.kill()
             success = False
     else:
         success = True
