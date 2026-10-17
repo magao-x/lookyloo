@@ -21,6 +21,24 @@ def utcnow():
 def format_timestamp_for_filename(ts):
     return ts.strftime(FOLDER_TIMESTAMP_FORMAT)
 
+
+def log_extensions_for(base_ext):
+    '''Given a base extension, get the file extensions to search for.
+
+    Assumes that files ending in "base_ext" correspond to flatlogs v1 entries and
+    files ending in "base_ext" + "2" correspond to v2 entries, and returns both.
+    If "base_ext" already ends in "2", only "base_ext" is returned and assumes
+    entries to be v2.
+    An empty "base_ext" matches files of any extension.
+
+    This matches MagAOX's ``libMagAOX/logger/logExtensions.hpp``
+    (``logExtensionsFor``) and ``magaox-python/magaox/utils.py``
+    (``log_extensions_for``); all three must follow the same rule.
+    '''
+    if base_ext == '' or base_ext.endswith('2'):
+        return [base_ext]
+    return [base_ext, base_ext + '2']
+
 def get_current_semester():
     now = datetime.datetime.now()
     this_year = now.year

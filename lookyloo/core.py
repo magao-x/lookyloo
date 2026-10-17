@@ -61,7 +61,12 @@ from .constants import (
     SLEEP_FOR_TELEMS,
     XRIF2FITS_TIMEOUT_SEC,
 )
-from .utils import format_timestamp_for_filename, parse_iso_datetime, utcnow
+from .utils import (
+    format_timestamp_for_filename,
+    log_extensions_for,
+    parse_iso_datetime,
+    utcnow,
+)
 
 log = logging.getLogger(__name__)
 
@@ -261,24 +266,30 @@ def filter_day_folders(
 def get_matching_paths(
     base_path: pathlib.Path,
     device: str,
-    extension: str,
+    extension: typing.Union[str, typing.Sequence[str]],
     newer_than_dt: datetime.datetime,
     older_than_dt: typing.Optional[datetime.datetime] = None,
     grab_one_before_start=False,
 ) -> typing.List[TimestampedFile]:
+    # a str is itself a sequence of str, so check for it explicitly
+    extensions = [extension] if isinstance(extension, str) else list(extension)
     newer_than_dt_fn = (
-        f"{device}_{newer_than_dt.strftime(MODIFIED_TIME_FORMAT)}000.{extension}"
+        f"{device}_{newer_than_dt.strftime(MODIFIED_TIME_FORMAT)}000.{extensions[0]}"
     )
     if older_than_dt is not None:
         older_than_dt_fn = (
-            f"{device}_{older_than_dt.strftime(MODIFIED_TIME_FORMAT)}000.{extension}"
+            f"{device}_{older_than_dt.strftime(MODIFIED_TIME_FORMAT)}000.{extensions[0]}"
         )
     else:
         older_than_dt_fn = None
     folders_within_bounds = filter_day_folders(base_path, newer_than_dt, older_than_dt)
     all_matching_files = list(
         itertools.chain(
-            *[fwb.glob(f"{device}_*.{extension}") for fwb in folders_within_bounds]
+            *[
+                fwb.glob(f"{device}_*.{ext}")
+                for fwb in folders_within_bounds
+                for ext in extensions
+            ]
         )
     )
     all_matching_files.sort()
@@ -328,7 +339,14 @@ def events_by_walking_observers_telem(data_root: pathlib.Path, start_dt):
         if reached_before_start:
             # we have found a telem archive that ends before our interval starts
             break
-        all_telems = list(sorted(day.glob("*.bintel"), reverse=True))
+        all_telems = list(
+            sorted(
+                itertools.chain(
+                    *[day.glob(f"*{ext}") for ext in log_extensions_for(".bintel")]
+                ),
+                reverse=True,
+            )
+        )
         for bintel in all_telems:
             log.debug(f"Parsing {bintel} for events")
             these_events = list(parse_logdump_for_observers(bintel))
@@ -977,7 +995,7 @@ def create_bundle_from_span(
             log_files = get_matching_paths(
                 logs_root,
                 device=devname,
-                extension="binlog",
+                extension=log_extensions_for("binlog"),
                 newer_than_dt=span.begin,
                 older_than_dt=span.end,
                 grab_one_before_start=True,
@@ -1004,7 +1022,7 @@ def create_bundle_from_span(
             telem_files = get_matching_paths(
                 telem_root,
                 device=devname,
-                extension="bintel",
+                extension=log_extensions_for("bintel"),
                 newer_than_dt=span.begin,
                 older_than_dt=span.end,
                 grab_one_before_start=True,
